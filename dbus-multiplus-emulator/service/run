@@ -1,0 +1,4 @@
+#!/bin/sh
+echo "*** starting dbus-multiplus-emulator ***"
+exec 2>&1
+exec /data/etc/dbus-multiplus-emulator/dbus-multiplus-emulator.py
