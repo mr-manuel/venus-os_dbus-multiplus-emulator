@@ -10,12 +10,38 @@ import _thread
 # import Victron Energy packages
 sys.path.insert(1, os.path.join(os.path.dirname(__file__), 'ext', 'velib_python'))
 from vedbus import VeDbusService
+from dbusmonitor import DbusMonitor
 
 # use WARNING for default, INFO for displaying actual steps and values, DEBUG for debugging
 logging.basicConfig(level=logging.WARNING)
 
 
+
+# enter grid frequency
+grid_frequency = 50.0000
+
+# enter the dbusServiceName from which the battery data should be fetched
+dbusServiceNameBattery = 'com.victronenergy.battery.zero'
+
+# enter the dbusServiceName from which the grid meter data should be fetched
+dbusServiceNameGrid = 'com.victronenergy.grid.mqtt_grid'
+
+
+
 class DbusMultiPlusEmulator:
+
+    # create dummy until updated
+    batteryValues = {
+        '/Dc/0/Current': 0,
+        '/Dc/0/Power': 0,
+        '/Dc/0/Temperature': 0,
+        '/Dc/0/Voltage': 0,
+        '/Soc': 0
+    }
+    gridValues = {
+        '/Ac/Voltage': 230
+    }
+
     def __init__(
         self,
         servicename,
@@ -54,21 +80,121 @@ class DbusMultiPlusEmulator:
                 path, settings['initial'], writeable=True, onchangecallback=self._handlechangedvalue
                 )
 
+
+        ## read values from battery
+        # Why this dummy? Because DbusMonitor expects these values to be there, even though we don't
+        # need them. So just add some dummy data. This can go away when DbusMonitor is more generic.
+        dummy = {'code': None, 'whenToLog': 'configChange', 'accessLevel': None}
+        dbus_tree = {
+            'com.victronenergy.battery': {
+                '/Connected': dummy,
+                '/ProductName': dummy,
+                '/Mgmt/Connection': dummy,
+                '/DeviceInstance': dummy,
+                '/Dc/0/Current': dummy,
+                '/Dc/0/Power': dummy,
+                '/Dc/0/Temperature': dummy,
+                '/Dc/0/Voltage': dummy,
+                '/Soc': dummy,
+                #'/Sense/Current': dummy,
+                #'/TimeToGo': dummy,
+                #'/ConsumedAmphours': dummy,
+                #'/ProductId': dummy,
+                #'/CustomName': dummy,
+                #'/Info/MaxChargeVoltage': dummy
+            },
+            'com.victronenergy.grid' : {
+            #    '/Connected': dummy,
+            #    '/ProductName': dummy,
+            #    '/Mgmt/Connection': dummy,
+            #    '/ProductId' : dummy,
+            #    '/DeviceType' : dummy,
+            #    '/Ac/L1/Power': dummy,
+            #    '/Ac/L2/Power': dummy,
+            #    '/Ac/L3/Power': dummy,
+            #    '/Ac/L1/Current': dummy,
+            #    '/Ac/L2/Current': dummy,
+            #    '/Ac/L3/Current': dummy
+                '/Ac/Voltage': dummy
+            },
+        }
+
+        #self._dbusreadservice = DbusMonitor('com.victronenergy.battery.zero')
+        self._dbusmonitor = self._create_dbus_monitor(
+            dbus_tree,
+            valueChangedCallback=self._dbus_value_changed,
+            deviceAddedCallback=self._device_added,
+            deviceRemovedCallback=self._device_removed
+        )
+
         GLib.timeout_add(1000, self._update) # pause 1000ms before the next request
 
 
+
+    def _create_dbus_monitor(self, *args, **kwargs):
+        return DbusMonitor(*args, **kwargs)
+
+
+    def _dbus_value_changed(self, dbusServiceName, dbusPath, dict, changes, deviceInstance):
+        self._changed = True
+
+        if dbusServiceName == dbusServiceNameBattery:
+            self.batteryValues.update({
+                str(dbusPath): changes['Value']
+            })
+
+        if dbusServiceName == dbusServiceNameGrid:
+            self.gridValues.update({
+                str(dbusPath): changes['Value']
+            })
+
+        #print('_dbus_value_changed')
+        #print(dbusServiceName)
+        #print(dbusPath)
+        #print(dict)
+        #print(changes)
+        #print(deviceInstance)
+
+        #print(self.batteryValues)
+        #print(self.gridValues)
+
+    def _device_added(self, service, instance, do_service_change=True):
+
+        #print('_device_added')
+        #print(service)
+        #print(instance)
+        #print(do_service_change)
+
+        pass
+
+    def _device_removed(self, service, instance):
+
+        #print('_device_added')
+        #print(service)
+        #print(instance)
+
+        pass
+
     def _update(self):
+
+        ac = {
+            'current': round(self.batteryValues['/Dc/0/Power']/self.gridValues['/Ac/Voltage']),
+            'power': self.batteryValues['/Dc/0/Power'],
+            'voltage': self.gridValues['/Ac/Voltage']
+        }
 
         self._dbusservice['/Ac/ActiveIn/ActiveInput'] =  0
         self._dbusservice['/Ac/ActiveIn/Connected'] =  1
         self._dbusservice['/Ac/ActiveIn/CurrentLimit'] =  16
         self._dbusservice['/Ac/ActiveIn/CurrentLimitIsAdjustable'] =  1
 
-        self._dbusservice['/Ac/ActiveIn/L1/F'] =  50.1111
-        self._dbusservice['/Ac/ActiveIn/L1/I'] =  0
-        self._dbusservice['/Ac/ActiveIn/L1/P'] =  0
-        self._dbusservice['/Ac/ActiveIn/L1/S'] =  0
-        self._dbusservice['/Ac/ActiveIn/L1/V'] =  230.33
+        # get values from BMS
+        # for bubble flow in chart and load visualization
+        self._dbusservice['/Ac/ActiveIn/L1/F'] =  grid_frequency
+        self._dbusservice['/Ac/ActiveIn/L1/I'] =  ac['current']
+        self._dbusservice['/Ac/ActiveIn/L1/P'] =  ac['power']
+        self._dbusservice['/Ac/ActiveIn/L1/S'] =  ac['power']
+        self._dbusservice['/Ac/ActiveIn/L1/V'] =  ac['voltage']
 
         self._dbusservice['/Ac/ActiveIn/L2/F'] =  None
         self._dbusservice['/Ac/ActiveIn/L2/I'] =  None
@@ -82,8 +208,10 @@ class DbusMultiPlusEmulator:
         self._dbusservice['/Ac/ActiveIn/L3/S'] =  None
         self._dbusservice['/Ac/ActiveIn/L3/V'] =  None
 
-        self._dbusservice['/Ac/ActiveIn/P'] =  0
-        self._dbusservice['/Ac/ActiveIn/S'] =  0
+        # get values from BMS
+        # for bubble flow in chart and load visualization
+        self._dbusservice['/Ac/ActiveIn/P'] =  ac['power']
+        self._dbusservice['/Ac/ActiveIn/S'] =  ac['power']
 
         self._dbusservice['/Ac/In/1/CurrentLimit'] =  16
         self._dbusservice['/Ac/In/1/CurrentLimitIsAdjustable'] =  1
@@ -94,11 +222,11 @@ class DbusMultiPlusEmulator:
         self._dbusservice['/Ac/NumberOfAcInputs'] =  1
         self._dbusservice['/Ac/NumberOfPhases'] =  1
 
-        self._dbusservice['/Ac/Out/L1/F'] =  50.1111
+        self._dbusservice['/Ac/Out/L1/F'] =  grid_frequency
         self._dbusservice['/Ac/Out/L1/I'] =  0
         self._dbusservice['/Ac/Out/L1/P'] =  0
         self._dbusservice['/Ac/Out/L1/S'] =  0
-        self._dbusservice['/Ac/Out/L1/V'] =  230.33
+        self._dbusservice['/Ac/Out/L1/V'] =  ac['voltage']
 
         self._dbusservice['/Ac/Out/L2/F'] =  None
         self._dbusservice['/Ac/Out/L2/I'] =  None
@@ -156,11 +284,13 @@ class DbusMultiPlusEmulator:
         self._dbusservice['/Bms/Error'] =  0
         self._dbusservice['/Bms/PreAlarm'] =  None
 
-        self._dbusservice['/Dc/0/Current'] =  0
+        # get values from BMS
+        # for bubble flow in GUI
+        self._dbusservice['/Dc/0/Current'] =  self.batteryValues['/Dc/0/Current']
         self._dbusservice['/Dc/0/MaxChargeCurrent'] =  70
-        self._dbusservice['/Dc/0/Power'] =  0
-        self._dbusservice['/Dc/0/Temperature'] =  0
-        self._dbusservice['/Dc/0/Voltage'] =  0
+        self._dbusservice['/Dc/0/Power'] =  self.batteryValues['/Dc/0/Power']
+        self._dbusservice['/Dc/0/Temperature'] =  self.batteryValues['/Dc/0/Temperature']
+        self._dbusservice['/Dc/0/Voltage'] =  self.batteryValues['/Dc/0/Voltage']
 
         #self._dbusservice['/Devices/0/Assistants'] =  0
 
@@ -261,7 +391,7 @@ class DbusMultiPlusEmulator:
         self._dbusservice['/Settings/SystemSetup/AcInput1'] =  1
         self._dbusservice['/Settings/SystemSetup/AcInput2'] =  0
         self._dbusservice['/ShortIds'] =  1
-        self._dbusservice['/Soc'] =  0
+        self._dbusservice['/Soc'] =  self.batteryValues['/Soc']
         self._dbusservice['/State'] =  8
         self._dbusservice['/SystemReset'] =  None
         self._dbusservice['/VebusChargeState'] =  1
