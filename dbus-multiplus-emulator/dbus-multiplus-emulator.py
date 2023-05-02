@@ -32,11 +32,11 @@ class DbusMultiPlusEmulator:
 
     # create dummy until updated
     batteryValues = {
-        '/Dc/0/Current': 0,
-        '/Dc/0/Power': 0,
-        '/Dc/0/Temperature': 0,
-        '/Dc/0/Voltage': 0,
-        '/Soc': 0
+        '/Dc/0/Current': None,
+        '/Dc/0/Power': None,
+        '/Dc/0/Temperature': None,
+        '/Dc/0/Voltage': None,
+        '/Soc': None
     }
     gridValues = {
         '/Ac/Voltage': 230
@@ -517,11 +517,11 @@ def main():
         '/Bms/Error': {'initial': 0},
         '/Bms/PreAlarm': {'initial': None},
 
-        '/Dc/0/Current': {'initial': 0},
+        '/Dc/0/Current': {'initial': None},
         '/Dc/0/MaxChargeCurrent': {'initial': 70},
-        '/Dc/0/Power': {'initial': 0},
-        '/Dc/0/Temperature': {'initial': 0},
-        '/Dc/0/Voltage': {'initial': 0},
+        '/Dc/0/Power': {'initial': None},
+        '/Dc/0/Temperature': {'initial': None},
+        '/Dc/0/Voltage': {'initial': None},
 
         #'/Devices/0/Assistants': {'initial': 0},
 
