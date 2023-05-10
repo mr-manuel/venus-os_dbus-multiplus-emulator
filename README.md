@@ -31,3 +31,10 @@ Run `/data/etc/dbus-multiplus-emulator/restart.sh`
 ### Debugging
 
 The logs can be checked with `tail -n 100 -f /data/log/dbus-multiplus-emulator/current | tai64nlocal`
+
+
+## Supporting/Sponsoring this project
+
+You like the project and you want to support me?
+
+[<img src="https://github.md0.eu/uploads/donate-button.svg" height="50">](https://www.paypal.com/donate/?hosted_button_id=3NEVZBDM5KABW)
