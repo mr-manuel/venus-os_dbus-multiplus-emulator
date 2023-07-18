@@ -27,9 +27,9 @@ fi
 grep -qxF "bash $SCRIPT_DIR/install.sh" $filename || echo "bash $SCRIPT_DIR/install.sh" >> $filename
 
 # set needed dbus settings
-dbus -y com.victronenergy.settings /Settings AddSetting Alarm/System GridLost 1 i 0 2
-dbus -y com.victronenergy.settings /Settings AddSetting CanBms/SocketcanCan0 CustomName '' s 0 2
-dbus -y com.victronenergy.settings /Settings AddSetting CanBms/SocketcanCan0 ProductId 0 i 0 9999
-dbus -y com.victronenergy.settings /Settings AddSetting Canbus/can0 Profile 0 i 0 9999
-dbus -y com.victronenergy.settings /Settings AddSetting SystemSetup AcInput1 1 i 0 2
-dbus -y com.victronenergy.settings /Settings AddSetting SystemSetup AcInput2 0 i 0 2
+dbus -y com.victronenergy.settings /Settings AddSetting Alarm/System GridLost 1 i 0 2 > /dev/null
+dbus -y com.victronenergy.settings /Settings AddSetting CanBms/SocketcanCan0 CustomName '' s 0 2 > /dev/null
+dbus -y com.victronenergy.settings /Settings AddSetting CanBms/SocketcanCan0 ProductId 0 i 0 9999 > /dev/null
+dbus -y com.victronenergy.settings /Settings AddSetting Canbus/can0 Profile 0 i 0 9999 > /dev/null
+dbus -y com.victronenergy.settings /Settings AddSetting SystemSetup AcInput1 1 i 0 2 > /dev/null
+dbus -y com.victronenergy.settings /Settings AddSetting SystemSetup AcInput2 0 i 0 2 > /dev/null
