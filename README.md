@@ -2,13 +2,11 @@
 
 <small>GitHub repository: [mr-manuel/venus-os_dbus-multiplus-emulator](https://github.com/mr-manuel/venus-os_dbus-multiplus-emulator)</small>
 
-### Run
+## Purpose
+The script emulates a MultiPlus II in Venus OS. This allows to show the correct values in the overview.
 
-To run the script once:
-
-1. Copy the `dbus-multiplus-emulator` folder to `/data/etc` on your Venus OS device
-
-2. Run `python /data/etc/dbus-multiplus-emulator/multiplus-emulator.py` as root
+## Config
+There is nothing specific to configure and it should work out of the box. If you have multiple grid meters, batteries or phases, then a configuration is maybe needed. In this case edit the `dbus-multiplus-emulator.py` and search for the `USER CHANGABLE VALUES | START` section.
 
 ### Install
 
