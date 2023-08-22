@@ -6,6 +6,8 @@ import logging
 import sys
 import os
 import _thread
+from time import time
+import json
 
 # import Victron Energy packages
 sys.path.insert(1, os.path.join(os.path.dirname(__file__), "ext", "velib_python"))
@@ -37,6 +39,48 @@ phase = "L1"
 # ------------------ USER CHANGABLE VALUES | END --------------------
 
 
+# create dictionary for later to count watt hours
+data_watt_hours = {"time_creation": int(time()), "count": 0}
+# calculate and save watthours after every x seconds
+data_watt_hours_timespan = 60
+# save file to non volatile storage after x seconds
+data_watt_hours_save = 900
+# file to save watt hours on persistent storage
+data_watt_hours_storage_file = "/data/etc/dbus-multiplus-emulator/data_watt_hours.json"
+# file to save many writing operations (best on ramdisk to not wear SD card)
+data_watt_hours_working_file = (
+    "/var/volatile/tmp/dbus-multiplus-emulator_data_watt_hours.json"
+)
+# get last modification timestamp
+timestamp_storage_file = (
+    os.path.getmtime(data_watt_hours_storage_file)
+    if os.path.isfile(data_watt_hours_storage_file)
+    else 0
+)
+
+# load data to prevent sending 0 watthours for OutToInverter (charging)/InverterToOut (discharging) before the first loop
+# check if file in volatile storage exists
+if os.path.isfile(data_watt_hours_working_file):
+    with open(data_watt_hours_working_file, "r") as file:
+        file = open(data_watt_hours_working_file, "r")
+        json_data = json.load(file)
+        logging.info(
+            "Loaded JSON for OutToInverter (charging)/InverterToOut (discharging) once"
+        )
+        logging.debug(json.dumps(json_data))
+# if not, check if file in persistent storage exists
+elif os.path.isfile(data_watt_hours_storage_file):
+    with open(data_watt_hours_storage_file, "r") as file:
+        file = open(data_watt_hours_storage_file, "r")
+        json_data = json.load(file)
+        logging.info(
+            "Loaded JSON for OutToInverter (charging)/InverterToOut (discharging) once from persistent storage"
+        )
+        logging.debug(json.dumps(json_data))
+else:
+    json_data = {}
+
+
 class DbusMultiPlusEmulator:
     def __init__(
         self,
@@ -65,7 +109,7 @@ class DbusMultiPlusEmulator:
         self._dbusservice.add_path("/ProductName", productname)  # ok
         self._dbusservice.add_path("/CustomName", "")  # ok
         self._dbusservice.add_path("/FirmwareVersion", 1175)  # ok
-        self._dbusservice.add_path("/HardwareVersion", "0.0.2 (20230718)")
+        self._dbusservice.add_path("/HardwareVersion", "0.0.3 (20230821)")
         self._dbusservice.add_path("/Connected", 1)  # ok
 
         # self._dbusservice.add_path('/Latency', None)
@@ -77,6 +121,7 @@ class DbusMultiPlusEmulator:
             self._dbusservice.add_path(
                 path,
                 settings["initial"],
+                gettextcallback=settings["textformat"],
                 writeable=True,
                 onchangecallback=self._handlechangedvalue,
             )
@@ -104,6 +149,7 @@ class DbusMultiPlusEmulator:
                     # '/ConsumedAmphours': dummy,
                     # '/ProductId': dummy,
                     # '/CustomName': dummy,
+                    "/Info/ChargeMode": dummy,
                     "/Info/MaxChargeCurrent": dummy,
                     "/Info/MaxChargeVoltage": dummy,
                     "/Info/MaxDischargeCurrent": dummy,
@@ -117,6 +163,7 @@ class DbusMultiPlusEmulator:
             "/Dc/0/Temperature": None,
             "/Dc/0/Voltage": None,
             "/Soc": None,
+            "/Info/ChargeMode": "",
             "/Info/MaxChargeCurrent": None,
             "/Info/MaxChargeVoltage": None,
             "/Info/MaxDischargeCurrent": None,
@@ -240,6 +287,8 @@ class DbusMultiPlusEmulator:
         pass
 
     def _update(self):
+        global data_watt_hours, data_watt_hours_timespan, data_watt_hours_save, data_watt_hours_storage_file, data_watt_hours_working_file, json_data, timestamp_storage_file
+
         """
         logging.error(
             f'self.gridValues["/Ac/Power"]: {self.gridValues["/Ac/Power"]} and self.batteryValues["/Dc/0/Power"]: {self.batteryValues["/Dc/0/Power"]}'
@@ -266,15 +315,147 @@ class DbusMultiPlusEmulator:
         ac_out_power = round(0 - dc_power - ac_in_power)
 
         ac_in = {
-            "current": round(ac_in_power / ac_in_voltage) if ac_in_voltage > 0 else 0,
+            "current": round(ac_in_power / ac_in_voltage, 2)
+            if ac_in_voltage > 0
+            else 0,
             "power": ac_in_power,
             "voltage": ac_in_voltage,
         }
         ac_out = {
-            "current": round(ac_out_power / ac_in_voltage) if ac_in_voltage > 0 else 0,
+            "current": round(ac_out_power / ac_in_voltage, 2)
+            if ac_in_voltage > 0
+            else 0,
             "power": ac_out_power,
             "voltage": ac_in_voltage,
         }
+
+        # ##################################################################################################################
+
+        # # # calculate watthours
+        # measure power and calculate watthours, since enphase provides only watthours for production/import/consumption and no export
+        # divide charging and discharging from dc
+        # charging (+)
+        dc_power_charging = dc_power if dc_power > 0 else 0
+        # discharging (-)
+        dc_power_discharging = dc_power * -1 if dc_power < 0 else 0
+
+        # timestamp
+        timestamp = int(time())
+
+        # check if x seconds are passed, if not sum values for calculation
+        if data_watt_hours["time_creation"] + data_watt_hours_timespan > timestamp:
+            data_watt_hours_dc = {
+                "charging": round(
+                    data_watt_hours["dc"]["charging"] + dc_power_charging
+                    if "dc" in data_watt_hours
+                    else dc_power_charging,
+                    3,
+                ),
+                "discharging": round(
+                    data_watt_hours["dc"]["discharging"] + dc_power_discharging
+                    if "dc" in data_watt_hours
+                    else dc_power_discharging,
+                    3,
+                ),
+            }
+
+            data_watt_hours.update(
+                {
+                    "dc": data_watt_hours_dc,
+                    "count": data_watt_hours["count"] + 1,
+                }
+            )
+
+            logging.info("--> data_watt_hours(): %s" % json.dumps(data_watt_hours))
+
+        # build mean, calculate time diff and Wh and write to file
+        else:
+            # check if file in volatile storage exists
+            if os.path.isfile(data_watt_hours_working_file):
+                with open(data_watt_hours_working_file, "r") as file:
+                    file = open(data_watt_hours_working_file, "r")
+                    data_watt_hours_old = json.load(file)
+                    logging.info("Loaded JSON")
+                    logging.info(json.dumps(data_watt_hours_old))
+
+            # if not, check if file in persistent storage exists
+            elif os.path.isfile(data_watt_hours_storage_file):
+                with open(data_watt_hours_storage_file, "r") as file:
+                    file = open(data_watt_hours_storage_file, "r")
+                    data_watt_hours_old = json.load(file)
+                    logging.info("Loaded JSON from persistent storage")
+                    logging.info(json.dumps(data_watt_hours_old))
+
+            # if not, generate data
+            else:
+                data_watt_hours_old_dc = {
+                    "charging": 0,
+                    "discharging": 0,
+                }
+                data_watt_hours_old = {"dc": data_watt_hours_old_dc}
+                logging.info("Generated JSON")
+                logging.info(json.dumps(data_watt_hours_old))
+
+            # factor to calculate Watthours: mean power * measuuring period / 3600 seconds (1 hour)
+            factor = (timestamp - data_watt_hours["time_creation"]) / 3600
+
+            dc_charging = round(
+                data_watt_hours_old["dc"]["charging"]
+                + (
+                    data_watt_hours["dc"]["charging"]
+                    / data_watt_hours["count"]
+                    * factor
+                )
+                / 1000,
+                3,
+            )
+            dc_discharging = round(
+                data_watt_hours_old["dc"]["discharging"]
+                + (
+                    data_watt_hours["dc"]["discharging"]
+                    / data_watt_hours["count"]
+                    * factor
+                )
+                / 1000,
+                3,
+            )
+
+            # update previously set data
+            json_data = {
+                "dc": {
+                    "charging": dc_charging,
+                    "discharging": dc_discharging,
+                }
+            }
+
+            # save data to volatile storage
+            with open(data_watt_hours_working_file, "w") as file:
+                file.write(json.dumps(json_data))
+
+            # save data to persistent storage if time is passed
+            if timestamp_storage_file + data_watt_hours_save < timestamp:
+                with open(data_watt_hours_storage_file, "w") as file:
+                    file.write(json.dumps(json_data))
+                timestamp_storage_file = timestamp
+                logging.info(
+                    "Written JSON for OutToInverter (charging)/InverterToOut (discharging) to persistent storage."
+                )
+
+            # begin a new cycle
+            data_watt_hours_dc = {
+                "charging": round(dc_power_charging, 3),
+                "discharging": round(dc_power_discharging, 3),
+            }
+
+            data_watt_hours = {
+                "time_creation": timestamp,
+                "dc": data_watt_hours_dc,
+                "count": 1,
+            }
+
+            logging.info("--> data_watt_hours(): %s" % json.dumps(data_watt_hours))
+
+        # ##################################################################################################################
 
         self._dbusservice["/Ac/ActiveIn/ActiveInput"] = 0
         self._dbusservice["/Ac/ActiveIn/Connected"] = 1
@@ -489,17 +670,25 @@ class DbusMultiPlusEmulator:
         self._dbusservice["/Devices/Dmc/Version"] = None
         self._dbusservice["/Devices/NumberOfMultis"] = 1
 
-        self._dbusservice["/Energy/AcIn1ToAcOut"] = 0
-        self._dbusservice["/Energy/AcIn1ToInverter"] = 0
-        self._dbusservice["/Energy/AcIn2ToAcOut"] = 0
-        self._dbusservice["/Energy/AcIn2ToInverter"] = 0
-        self._dbusservice["/Energy/AcOutToAcIn1"] = 0
-        self._dbusservice["/Energy/AcOutToAcIn2"] = 0
-        self._dbusservice["/Energy/InverterToAcIn1"] = 0
-        self._dbusservice["/Energy/InverterToAcIn2"] = 0
-        self._dbusservice["/Energy/InverterToAcOut"] = 0
-        self._dbusservice["/Energy/OutToInverter"] = 0
-        self._dbusservice["/ExtraBatteryCurrent"] = 0
+        # self._dbusservice["/Energy/AcIn1ToAcOut"] = 0
+        # self._dbusservice["/Energy/AcIn1ToInverter"] = 0
+        # self._dbusservice["/Energy/AcIn2ToAcOut"] = 0
+        # self._dbusservice["/Energy/AcIn2ToInverter"] = 0
+        # self._dbusservice["/Energy/AcOutToAcIn1"] = 0
+        # self._dbusservice["/Energy/AcOutToAcIn2"] = 0
+        # self._dbusservice["/Energy/InverterToAcIn1"] = 0
+        # self._dbusservice["/Energy/InverterToAcIn2"] = 0
+        self._dbusservice["/Energy/InverterToAcOut"] = (
+            json_data["dc"]["discharging"]
+            if "dc" in json_data and "discharging" in json_data["dc"]
+            else 0
+        )
+        self._dbusservice["/Energy/OutToInverter"] = (
+            json_data["dc"]["charging"]
+            if "dc" in json_data and "charging" in json_data["dc"]
+            else 0
+        )
+        # self._dbusservice["/ExtraBatteryCurrent"] = 0
 
         self._dbusservice["/FirmwareFeatures/BolFrame"] = 1
         self._dbusservice["/FirmwareFeatures/BolUBatAndTBatSense"] = 1
@@ -530,12 +719,18 @@ class DbusMultiPlusEmulator:
         # '/Interfaces/Mk2/Tunnel'] = None
         # '/Interfaces/Mk2/Version'] = 1170212
 
-        self._dbusservice["/Leds/Absorption"] = 0
-        self._dbusservice["/Leds/Bulk"] = 0
-        self._dbusservice["/Leds/Float"] = 0
-        self._dbusservice["/Leds/Inverter"] = 0
+        self._dbusservice["/Leds/Absorption"] = (
+            1 if self.batteryValues["/Info/ChargeMode"].startswith("Absorption") else 0
+        )
+        self._dbusservice["/Leds/Bulk"] = (
+            1 if self.batteryValues["/Info/ChargeMode"].startswith("Bulk") else 0
+        )
+        self._dbusservice["/Leds/Float"] = (
+            1 if self.batteryValues["/Info/ChargeMode"].startswith("Float") else 0
+        )
+        self._dbusservice["/Leds/Inverter"] = 1
         self._dbusservice["/Leds/LowBattery"] = 0
-        self._dbusservice["/Leds/Mains"] = 0
+        self._dbusservice["/Leds/Mains"] = 1
         self._dbusservice["/Leds/Overload"] = 0
         self._dbusservice["/Leds/Temperature"] = 0
 
@@ -576,220 +771,308 @@ def main():
     # Have a mainloop, so we can send/receive asynchronous calls to and from dbus
     DBusGMainLoop(set_as_default=True)
 
+    # formatting
+    def _kwh(p, v):
+        return str("%.2f" % v) + "kWh"
+
+    def _a(p, v):
+        return str("%.2f" % v) + "A"
+
+    def _w(p, v):
+        return str("%i" % v) + "W"
+
+    def _va(p, v):
+        return str("%i" % v) + "VA"
+
+    def _v(p, v):
+        return str("%i" % v) + "V"
+
+    def _hz(p, v):
+        return str("%.1f" % v) + "Hz"
+
+    def _c(p, v):
+        return str("%i" % v) + "°C"
+
+    def _percent(p, v):
+        return str("%.1f" % v) + "%"
+
+    def _n(p, v):
+        return str("%i" % v)
+
+    def _s(p, v):
+        return str("%s" % v)
+
     paths_dbus = {
-        "/Ac/ActiveIn/ActiveInput": {"initial": 0},
-        "/Ac/ActiveIn/Connected": {"initial": 1},
-        "/Ac/ActiveIn/CurrentLimit": {"initial": 16},
-        "/Ac/ActiveIn/CurrentLimitIsAdjustable": {"initial": 1},
+        "/Ac/ActiveIn/ActiveInput": {"initial": 0, "textformat": _n},
+        "/Ac/ActiveIn/Connected": {"initial": 1, "textformat": _n},
+        "/Ac/ActiveIn/CurrentLimit": {"initial": 16, "textformat": _a},
+        "/Ac/ActiveIn/CurrentLimitIsAdjustable": {"initial": 1, "textformat": _n},
         # ----
-        "/Ac/ActiveIn/L1/F": {"initial": None},
-        "/Ac/ActiveIn/L1/I": {"initial": None},
-        "/Ac/ActiveIn/L1/P": {"initial": None},
-        "/Ac/ActiveIn/L1/S": {"initial": None},
-        "/Ac/ActiveIn/L1/V": {"initial": None},
+        "/Ac/ActiveIn/L1/F": {"initial": None, "textformat": _hz},
+        "/Ac/ActiveIn/L1/I": {"initial": None, "textformat": _a},
+        "/Ac/ActiveIn/L1/P": {"initial": None, "textformat": _w},
+        "/Ac/ActiveIn/L1/S": {"initial": None, "textformat": _va},
+        "/Ac/ActiveIn/L1/V": {"initial": None, "textformat": _v},
         # ----
-        "/Ac/ActiveIn/L2/F": {"initial": None},
-        "/Ac/ActiveIn/L2/I": {"initial": None},
-        "/Ac/ActiveIn/L2/P": {"initial": None},
-        "/Ac/ActiveIn/L2/S": {"initial": None},
-        "/Ac/ActiveIn/L2/V": {"initial": None},
+        "/Ac/ActiveIn/L2/F": {"initial": None, "textformat": _hz},
+        "/Ac/ActiveIn/L2/I": {"initial": None, "textformat": _a},
+        "/Ac/ActiveIn/L2/P": {"initial": None, "textformat": _w},
+        "/Ac/ActiveIn/L2/S": {"initial": None, "textformat": _va},
+        "/Ac/ActiveIn/L2/V": {"initial": None, "textformat": _v},
         # ----
-        "/Ac/ActiveIn/L3/F": {"initial": None},
-        "/Ac/ActiveIn/L3/I": {"initial": None},
-        "/Ac/ActiveIn/L3/P": {"initial": None},
-        "/Ac/ActiveIn/L3/S": {"initial": None},
-        "/Ac/ActiveIn/L3/V": {"initial": None},
+        "/Ac/ActiveIn/L3/F": {"initial": None, "textformat": _hz},
+        "/Ac/ActiveIn/L3/I": {"initial": None, "textformat": _a},
+        "/Ac/ActiveIn/L3/P": {"initial": None, "textformat": _w},
+        "/Ac/ActiveIn/L3/S": {"initial": None, "textformat": _va},
+        "/Ac/ActiveIn/L3/V": {"initial": None, "textformat": _v},
         # ----
-        "/Ac/ActiveIn/P": {"initial": 0},
-        "/Ac/ActiveIn/S": {"initial": 0},
+        "/Ac/ActiveIn/P": {"initial": 0, "textformat": _w},
+        "/Ac/ActiveIn/S": {"initial": 0, "textformat": _va},
         # ----
-        "/Ac/In/1/CurrentLimit": {"initial": 16},
-        "/Ac/In/1/CurrentLimitIsAdjustable": {"initial": 1},
+        "/Ac/In/1/CurrentLimit": {"initial": 16, "textformat": _a},
+        "/Ac/In/1/CurrentLimitIsAdjustable": {"initial": 1, "textformat": _n},
         # ----
-        "/Ac/In/2/CurrentLimit": {"initial": None},
-        "/Ac/In/2/CurrentLimitIsAdjustable": {"initial": None},
+        "/Ac/In/2/CurrentLimit": {"initial": None, "textformat": _a},
+        "/Ac/In/2/CurrentLimitIsAdjustable": {"initial": None, "textformat": _n},
         # ----
-        "/Ac/NumberOfAcInputs": {"initial": 1},
-        "/Ac/NumberOfPhases": {"initial": 1},
+        "/Ac/NumberOfAcInputs": {"initial": 1, "textformat": _n},
+        "/Ac/NumberOfPhases": {"initial": 1, "textformat": _n},
         # ----
-        "/Ac/Out/L1/F": {"initial": None},
-        "/Ac/Out/L1/I": {"initial": None},
-        "/Ac/Out/L1/NominalInverterPower": {"initial": None},
-        "/Ac/Out/L1/P": {"initial": None},
-        "/Ac/Out/L1/S": {"initial": None},
-        "/Ac/Out/L1/V": {"initial": None},
+        "/Ac/Out/L1/F": {"initial": None, "textformat": _hz},
+        "/Ac/Out/L1/I": {"initial": None, "textformat": _a},
+        "/Ac/Out/L1/NominalInverterPower": {"initial": None, "textformat": _w},
+        "/Ac/Out/L1/P": {"initial": None, "textformat": _w},
+        "/Ac/Out/L1/S": {"initial": None, "textformat": _va},
+        "/Ac/Out/L1/V": {"initial": None, "textformat": _v},
         # ----
-        "/Ac/Out/L2/F": {"initial": None},
-        "/Ac/Out/L2/I": {"initial": None},
-        "/Ac/Out/L2/NominalInverterPower": {"initial": None},
-        "/Ac/Out/L2/P": {"initial": None},
-        "/Ac/Out/L2/S": {"initial": None},
-        "/Ac/Out/L2/V": {"initial": None},
+        "/Ac/Out/L2/F": {"initial": None, "textformat": _hz},
+        "/Ac/Out/L2/I": {"initial": None, "textformat": _a},
+        "/Ac/Out/L2/NominalInverterPower": {"initial": None, "textformat": _w},
+        "/Ac/Out/L2/P": {"initial": None, "textformat": _w},
+        "/Ac/Out/L2/S": {"initial": None, "textformat": _va},
+        "/Ac/Out/L2/V": {"initial": None, "textformat": _v},
         # ----
-        "/Ac/Out/L3/F": {"initial": None},
-        "/Ac/Out/L3/I": {"initial": None},
-        "/Ac/Out/L3/NominalInverterPower": {"initial": None},
-        "/Ac/Out/L3/P": {"initial": None},
-        "/Ac/Out/L3/S": {"initial": None},
-        "/Ac/Out/L3/V": {"initial": None},
+        "/Ac/Out/L3/F": {"initial": None, "textformat": _hz},
+        "/Ac/Out/L3/I": {"initial": None, "textformat": _a},
+        "/Ac/Out/L3/NominalInverterPower": {"initial": None, "textformat": _w},
+        "/Ac/Out/L3/P": {"initial": None, "textformat": _w},
+        "/Ac/Out/L3/S": {"initial": None, "textformat": _va},
+        "/Ac/Out/L3/V": {"initial": None, "textformat": _v},
         # ----
-        "/Ac/Out/NominalInverterPower": {"initial": 4500},
-        "/Ac/Out/P": {"initial": 0},
-        "/Ac/Out/S": {"initial": 0},
+        "/Ac/Out/NominalInverterPower": {"initial": 4500, "textformat": _w},
+        "/Ac/Out/P": {"initial": 0, "textformat": _w},
+        "/Ac/Out/S": {"initial": 0, "textformat": _va},
         # ----
-        "/Ac/PowerMeasurementType": {"initial": 4},
-        "/Ac/State/IgnoreAcIn1": {"initial": 0},
-        "/Ac/State/SplitPhaseL2Passthru": {"initial": None},
+        "/Ac/PowerMeasurementType": {"initial": 4, "textformat": _n},
+        "/Ac/State/IgnoreAcIn1": {"initial": 0, "textformat": _n},
+        "/Ac/State/SplitPhaseL2Passthru": {"initial": None, "textformat": _n},
         # ----
-        "/Alarms/HighDcCurrent": {"initial": 0},
-        "/Alarms/HighDcVoltage": {"initial": 0},
-        "/Alarms/HighTemperature": {"initial": 0},
-        "/Alarms/L1/HighTemperature": {"initial": 0},
-        "/Alarms/L1/LowBattery": {"initial": 0},
-        "/Alarms/L1/Overload": {"initial": 0},
-        "/Alarms/L1/Ripple": {"initial": 0},
-        "/Alarms/L2/HighTemperature": {"initial": 0},
-        "/Alarms/L2/LowBattery": {"initial": 0},
-        "/Alarms/L2/Overload": {"initial": 0},
-        "/Alarms/L2/Ripple": {"initial": 0},
-        "/Alarms/L3/HighTemperature": {"initial": 0},
-        "/Alarms/L3/LowBattery": {"initial": 0},
-        "/Alarms/L3/Overload": {"initial": 0},
-        "/Alarms/L3/Ripple": {"initial": 0},
-        "/Alarms/LowBattery": {"initial": 0},
-        "/Alarms/Overload": {"initial": 0},
-        "/Alarms/PhaseRotation": {"initial": 0},
-        "/Alarms/Ripple": {"initial": 0},
-        "/Alarms/TemperatureSensor": {"initial": 0},
-        "/Alarms/VoltageSensor": {"initial": 0},
+        "/Alarms/HighDcCurrent": {"initial": 0, "textformat": _n},
+        "/Alarms/HighDcVoltage": {"initial": 0, "textformat": _n},
+        "/Alarms/HighTemperature": {"initial": 0, "textformat": _n},
+        "/Alarms/L1/HighTemperature": {"initial": 0, "textformat": _n},
+        "/Alarms/L1/LowBattery": {"initial": 0, "textformat": _n},
+        "/Alarms/L1/Overload": {"initial": 0, "textformat": _n},
+        "/Alarms/L1/Ripple": {"initial": 0, "textformat": _n},
+        "/Alarms/L2/HighTemperature": {"initial": 0, "textformat": _n},
+        "/Alarms/L2/LowBattery": {"initial": 0, "textformat": _n},
+        "/Alarms/L2/Overload": {"initial": 0, "textformat": _n},
+        "/Alarms/L2/Ripple": {"initial": 0, "textformat": _n},
+        "/Alarms/L3/HighTemperature": {"initial": 0, "textformat": _n},
+        "/Alarms/L3/LowBattery": {"initial": 0, "textformat": _n},
+        "/Alarms/L3/Overload": {"initial": 0, "textformat": _n},
+        "/Alarms/L3/Ripple": {"initial": 0, "textformat": _n},
+        "/Alarms/LowBattery": {"initial": 0, "textformat": _n},
+        "/Alarms/Overload": {"initial": 0, "textformat": _n},
+        "/Alarms/PhaseRotation": {"initial": 0, "textformat": _n},
+        "/Alarms/Ripple": {"initial": 0, "textformat": _n},
+        "/Alarms/TemperatureSensor": {"initial": 0, "textformat": _n},
+        "/Alarms/VoltageSensor": {"initial": 0, "textformat": _n},
         # ----
-        "/BatteryOperationalLimits/BatteryLowVoltage": {"initial": None},
-        "/BatteryOperationalLimits/MaxChargeCurrent": {"initial": None},
-        "/BatteryOperationalLimits/MaxChargeVoltage": {"initial": None},
-        "/BatteryOperationalLimits/MaxDischargeCurrent": {"initial": None},
-        "/BatterySense/Temperature": {"initial": None},
-        "/BatterySense/Voltage": {"initial": None},
+        "/BatteryOperationalLimits/BatteryLowVoltage": {
+            "initial": None,
+            "textformat": _v,
+        },
+        "/BatteryOperationalLimits/MaxChargeCurrent": {
+            "initial": None,
+            "textformat": _a,
+        },
+        "/BatteryOperationalLimits/MaxChargeVoltage": {
+            "initial": None,
+            "textformat": _v,
+        },
+        "/BatteryOperationalLimits/MaxDischargeCurrent": {
+            "initial": None,
+            "textformat": _a,
+        },
+        "/BatterySense/Temperature": {"initial": None, "textformat": _c},
+        "/BatterySense/Voltage": {"initial": None, "textformat": _v},
         # ----
-        "/Bms/AllowToCharge": {"initial": 1},
-        "/Bms/AllowToChargeRate": {"initial": 0},
-        "/Bms/AllowToDischarge": {"initial": 1},
-        "/Bms/BmsExpected": {"initial": 0},
-        "/Bms/BmsType": {"initial": 0},
-        "/Bms/Error": {"initial": 0},
-        "/Bms/PreAlarm": {"initial": None},
+        "/Bms/AllowToCharge": {"initial": 1, "textformat": _n},
+        "/Bms/AllowToChargeRate": {"initial": 0, "textformat": _n},
+        "/Bms/AllowToDischarge": {"initial": 1, "textformat": _n},
+        "/Bms/BmsExpected": {"initial": 0, "textformat": _n},
+        "/Bms/BmsType": {"initial": 0, "textformat": _n},
+        "/Bms/Error": {"initial": 0, "textformat": _n},
+        "/Bms/PreAlarm": {"initial": None, "textformat": _n},
         # ----
-        "/Dc/0/Current": {"initial": None},
-        "/Dc/0/MaxChargeCurrent": {"initial": None},
-        "/Dc/0/Power": {"initial": None},
-        "/Dc/0/Temperature": {"initial": None},
-        "/Dc/0/Voltage": {"initial": None},
+        "/Dc/0/Current": {"initial": None, "textformat": _a},
+        "/Dc/0/MaxChargeCurrent": {"initial": None, "textformat": _a},
+        "/Dc/0/Power": {"initial": None, "textformat": _w},
+        "/Dc/0/Temperature": {"initial": None, "textformat": _c},
+        "/Dc/0/Voltage": {"initial": None, "textformat": _v},
         # ----
-        # '/Devices/0/Assistants': {'initial': 0},
+        # '/Devices/0/Assistants': {'initial': 0, "textformat": _n},
         # ----
-        "/Devices/0/ExtendStatus/ChargeDisabledDueToLowTemp": {"initial": 0},
-        "/Devices/0/ExtendStatus/ChargeIsDisabled": {"initial": None},
-        "/Devices/0/ExtendStatus/GridRelayReport/Code": {"initial": None},
-        "/Devices/0/ExtendStatus/GridRelayReport/Count": {"initial": 0},
-        "/Devices/0/ExtendStatus/GridRelayReport/Reset": {"initial": 0},
-        "/Devices/0/ExtendStatus/HighDcCurrent": {"initial": 0},
-        "/Devices/0/ExtendStatus/HighDcVoltage": {"initial": 0},
-        "/Devices/0/ExtendStatus/IgnoreAcIn1": {"initial": 0},
-        "/Devices/0/ExtendStatus/MainsPllLocked": {"initial": 1},
-        "/Devices/0/ExtendStatus/PcvPotmeterOnZero": {"initial": 0},
-        "/Devices/0/ExtendStatus/PowerPackPreOverload": {"initial": 0},
-        "/Devices/0/ExtendStatus/SocTooLowToInvert": {"initial": 0},
-        "/Devices/0/ExtendStatus/SustainMode": {"initial": 0},
-        "/Devices/0/ExtendStatus/SwitchoverInfo/Connecting": {"initial": 0},
-        "/Devices/0/ExtendStatus/SwitchoverInfo/Delay": {"initial": 0},
-        "/Devices/0/ExtendStatus/SwitchoverInfo/ErrorFlags": {"initial": 0},
-        "/Devices/0/ExtendStatus/TemperatureHighForceBypass": {"initial": 0},
-        "/Devices/0/ExtendStatus/VeBusNetworkQualityCounter": {"initial": 0},
-        "/Devices/0/ExtendStatus/WaitingForRelayTest": {"initial": 0},
+        "/Devices/0/ExtendStatus/ChargeDisabledDueToLowTemp": {
+            "initial": 0,
+            "textformat": _n,
+        },
+        "/Devices/0/ExtendStatus/ChargeIsDisabled": {"initial": None, "textformat": _n},
+        "/Devices/0/ExtendStatus/GridRelayReport/Code": {
+            "initial": None,
+            "textformat": _n,
+        },
+        "/Devices/0/ExtendStatus/GridRelayReport/Count": {
+            "initial": 0,
+            "textformat": _n,
+        },
+        "/Devices/0/ExtendStatus/GridRelayReport/Reset": {
+            "initial": 0,
+            "textformat": _n,
+        },
+        "/Devices/0/ExtendStatus/HighDcCurrent": {"initial": 0, "textformat": _n},
+        "/Devices/0/ExtendStatus/HighDcVoltage": {"initial": 0, "textformat": _n},
+        "/Devices/0/ExtendStatus/IgnoreAcIn1": {"initial": 0, "textformat": _n},
+        "/Devices/0/ExtendStatus/MainsPllLocked": {"initial": 1, "textformat": _n},
+        "/Devices/0/ExtendStatus/PcvPotmeterOnZero": {"initial": 0, "textformat": _n},
+        "/Devices/0/ExtendStatus/PowerPackPreOverload": {
+            "initial": 0,
+            "textformat": _n,
+        },
+        "/Devices/0/ExtendStatus/SocTooLowToInvert": {"initial": 0, "textformat": _n},
+        "/Devices/0/ExtendStatus/SustainMode": {"initial": 0, "textformat": _n},
+        "/Devices/0/ExtendStatus/SwitchoverInfo/Connecting": {
+            "initial": 0,
+            "textformat": _n,
+        },
+        "/Devices/0/ExtendStatus/SwitchoverInfo/Delay": {
+            "initial": 0,
+            "textformat": _n,
+        },
+        "/Devices/0/ExtendStatus/SwitchoverInfo/ErrorFlags": {
+            "initial": 0,
+            "textformat": _n,
+        },
+        "/Devices/0/ExtendStatus/TemperatureHighForceBypass": {
+            "initial": 0,
+            "textformat": _n,
+        },
+        "/Devices/0/ExtendStatus/VeBusNetworkQualityCounter": {
+            "initial": 0,
+            "textformat": _n,
+        },
+        "/Devices/0/ExtendStatus/WaitingForRelayTest": {"initial": 0, "textformat": _n},
         # ----
-        "/Devices/0/InterfaceProtectionLog/0/ErrorFlags": {"initial": None},
-        "/Devices/0/InterfaceProtectionLog/0/Time": {"initial": None},
-        "/Devices/0/InterfaceProtectionLog/1/ErrorFlags": {"initial": None},
-        "/Devices/0/InterfaceProtectionLog/1/Time": {"initial": None},
-        "/Devices/0/InterfaceProtectionLog/2/ErrorFlags": {"initial": None},
-        "/Devices/0/InterfaceProtectionLog/2/Time": {"initial": None},
-        "/Devices/0/InterfaceProtectionLog/3/ErrorFlags": {"initial": None},
-        "/Devices/0/InterfaceProtectionLog/3/Time": {"initial": None},
-        "/Devices/0/InterfaceProtectionLog/4/ErrorFlags": {"initial": None},
-        "/Devices/0/InterfaceProtectionLog/4/Time": {"initial": None},
+        "/Devices/0/InterfaceProtectionLog/0/ErrorFlags": {
+            "initial": None,
+            "textformat": _n,
+        },
+        "/Devices/0/InterfaceProtectionLog/0/Time": {"initial": None, "textformat": _n},
+        "/Devices/0/InterfaceProtectionLog/1/ErrorFlags": {
+            "initial": None,
+            "textformat": _n,
+        },
+        "/Devices/0/InterfaceProtectionLog/1/Time": {"initial": None, "textformat": _n},
+        "/Devices/0/InterfaceProtectionLog/2/ErrorFlags": {
+            "initial": None,
+            "textformat": _n,
+        },
+        "/Devices/0/InterfaceProtectionLog/2/Time": {"initial": None, "textformat": _n},
+        "/Devices/0/InterfaceProtectionLog/3/ErrorFlags": {
+            "initial": None,
+            "textformat": _n,
+        },
+        "/Devices/0/InterfaceProtectionLog/3/Time": {"initial": None, "textformat": _n},
+        "/Devices/0/InterfaceProtectionLog/4/ErrorFlags": {
+            "initial": None,
+            "textformat": _n,
+        },
+        "/Devices/0/InterfaceProtectionLog/4/Time": {"initial": None, "textformat": _n},
         # ----
-        "/Devices/0/SerialNumber": {"initial": "HQ00000AA01"},
-        "/Devices/0/Version": {"initial": 2623497},
+        "/Devices/0/SerialNumber": {"initial": "HQ00000AA01", "textformat": _s},
+        "/Devices/0/Version": {"initial": 2623497, "textformat": _s},
         # ----
-        "/Devices/Bms/Version": {"initial": None},
-        "/Devices/Dmc/Version": {"initial": None},
-        "/Devices/NumberOfMultis": {"initial": 1},
+        "/Devices/Bms/Version": {"initial": None, "textformat": _s},
+        "/Devices/Dmc/Version": {"initial": None, "textformat": _s},
+        "/Devices/NumberOfMultis": {"initial": 1, "textformat": _n},
         # ----
-        "/Energy/AcIn1ToAcOut": {"initial": 0},
-        "/Energy/AcIn1ToInverter": {"initial": 0},
-        "/Energy/AcIn2ToAcOut": {"initial": 0},
-        "/Energy/AcIn2ToInverter": {"initial": 0},
-        "/Energy/AcOutToAcIn1": {"initial": 0},
-        "/Energy/AcOutToAcIn2": {"initial": 0},
-        "/Energy/InverterToAcIn1": {"initial": 0},
-        "/Energy/InverterToAcIn2": {"initial": 0},
-        "/Energy/InverterToAcOut": {"initial": 0},
-        "/Energy/OutToInverter": {"initial": 0},
-        "/ExtraBatteryCurrent": {"initial": 0},
+        "/Energy/AcIn1ToAcOut": {"initial": 0, "textformat": _n},
+        "/Energy/AcIn1ToInverter": {"initial": 0, "textformat": _n},
+        "/Energy/AcIn2ToAcOut": {"initial": 0, "textformat": _n},
+        "/Energy/AcIn2ToInverter": {"initial": 0, "textformat": _n},
+        "/Energy/AcOutToAcIn1": {"initial": 0, "textformat": _n},
+        "/Energy/AcOutToAcIn2": {"initial": 0, "textformat": _n},
+        "/Energy/InverterToAcIn1": {"initial": 0, "textformat": _n},
+        "/Energy/InverterToAcIn2": {"initial": 0, "textformat": _n},
+        "/Energy/InverterToAcOut": {"initial": 0, "textformat": _n},
+        "/Energy/OutToInverter": {"initial": 0, "textformat": _n},
+        "/ExtraBatteryCurrent": {"initial": 0, "textformat": _n},
         # ----
-        "/FirmwareFeatures/BolFrame": {"initial": 1},
-        "/FirmwareFeatures/BolUBatAndTBatSense": {"initial": 1},
-        "/FirmwareFeatures/CommandWriteViaId": {"initial": 1},
-        "/FirmwareFeatures/IBatSOCBroadcast": {"initial": 1},
-        "/FirmwareFeatures/NewPanelFrame": {"initial": 1},
-        "/FirmwareFeatures/SetChargeState": {"initial": 1},
-        "/FirmwareSubVersion": {"initial": 0},
+        "/FirmwareFeatures/BolFrame": {"initial": 1, "textformat": _n},
+        "/FirmwareFeatures/BolUBatAndTBatSense": {"initial": 1, "textformat": _n},
+        "/FirmwareFeatures/CommandWriteViaId": {"initial": 1, "textformat": _n},
+        "/FirmwareFeatures/IBatSOCBroadcast": {"initial": 1, "textformat": _n},
+        "/FirmwareFeatures/NewPanelFrame": {"initial": 1, "textformat": _n},
+        "/FirmwareFeatures/SetChargeState": {"initial": 1, "textformat": _n},
+        "/FirmwareSubVersion": {"initial": 0, "textformat": _n},
         # ----
-        "/Hub/ChargeVoltage": {"initial": 55.2},
-        "/Hub4/AssistantId": {"initial": 5},
-        "/Hub4/DisableCharge": {"initial": 0},
-        "/Hub4/DisableFeedIn": {"initial": 0},
-        "/Hub4/DoNotFeedInOvervoltage": {"initial": 1},
-        "/Hub4/FixSolarOffsetTo100mV": {"initial": 1},
-        "/Hub4/L1/AcPowerSetpoint": {"initial": 0},
-        "/Hub4/L1/CurrentLimitedDueToHighTemp": {"initial": 0},
-        "/Hub4/L1/FrequencyVariationOccurred": {"initial": 0},
-        "/Hub4/L1/MaxFeedInPower": {"initial": 32766},
-        "/Hub4/L1/OffsetAddedToVoltageSetpoint": {"initial": 0},
-        "/Hub4/Sustain": {"initial": 0},
-        "/Hub4/TargetPowerIsMaxFeedIn": {"initial": 0},
+        "/Hub/ChargeVoltage": {"initial": 55.2, "textformat": _n},
+        "/Hub4/AssistantId": {"initial": 5, "textformat": _n},
+        "/Hub4/DisableCharge": {"initial": 0, "textformat": _n},
+        "/Hub4/DisableFeedIn": {"initial": 0, "textformat": _n},
+        "/Hub4/DoNotFeedInOvervoltage": {"initial": 1, "textformat": _n},
+        "/Hub4/FixSolarOffsetTo100mV": {"initial": 1, "textformat": _n},
+        "/Hub4/L1/AcPowerSetpoint": {"initial": 0, "textformat": _n},
+        "/Hub4/L1/CurrentLimitedDueToHighTemp": {"initial": 0, "textformat": _n},
+        "/Hub4/L1/FrequencyVariationOccurred": {"initial": 0, "textformat": _n},
+        "/Hub4/L1/MaxFeedInPower": {"initial": 32766, "textformat": _n},
+        "/Hub4/L1/OffsetAddedToVoltageSetpoint": {"initial": 0, "textformat": _n},
+        "/Hub4/Sustain": {"initial": 0, "textformat": _n},
+        "/Hub4/TargetPowerIsMaxFeedIn": {"initial": 0, "textformat": _n},
         # ----
-        # '/Interfaces/Mk2/Connection': {'initial': '/dev/ttyS3'},
-        # '/Interfaces/Mk2/ProductId': {'initial': 4464},
-        # '/Interfaces/Mk2/ProductName': {'initial': 'MK3'},
-        # '/Interfaces/Mk2/Status/BusFreeMode': {'initial': 1},
-        # '/Interfaces/Mk2/Tunnel': {'initial': None},
-        # '/Interfaces/Mk2/Version': {'initial': 1170212},
+        # '/Interfaces/Mk2/Connection': {'initial': '/dev/ttyS3', "textformat": _n},
+        # '/Interfaces/Mk2/ProductId': {'initial': 4464, "textformat": _n},
+        # '/Interfaces/Mk2/ProductName': {'initial': 'MK3', "textformat": _n},
+        # '/Interfaces/Mk2/Status/BusFreeMode': {'initial': 1, "textformat": _n},
+        # '/Interfaces/Mk2/Tunnel': {'initial': None, "textformat": _n},
+        # '/Interfaces/Mk2/Version': {'initial': 1170212, "textformat": _n},
         # ----
-        "/Leds/Absorption": {"initial": 0},
-        "/Leds/Bulk": {"initial": 0},
-        "/Leds/Float": {"initial": 0},
-        "/Leds/Inverter": {"initial": 0},
-        "/Leds/LowBattery": {"initial": 0},
-        "/Leds/Mains": {"initial": 0},
-        "/Leds/Overload": {"initial": 0},
-        "/Leds/Temperature": {"initial": 0},
-        "/Mode": {"initial": 3},
-        "/ModeIsAdjustable": {"initial": 1},
-        "/PvInverter/Disable": {"initial": 1},
-        "/Quirks": {"initial": 0},
-        "/RedetectSystem": {"initial": 0},
-        "/Settings/Alarm/System/GridLost": {"initial": 1},
-        "/Settings/SystemSetup/AcInput1": {"initial": 1},
-        "/Settings/SystemSetup/AcInput2": {"initial": 0},
-        "/ShortIds": {"initial": 1},
-        "/Soc": {"initial": 0},
-        "/State": {"initial": 3},
-        "/SystemReset": {"initial": None},
-        "/VebusChargeState": {"initial": 1},
-        "/VebusError": {"initial": 0},
-        "/VebusMainState": {"initial": 9},
+        "/Leds/Absorption": {"initial": 0, "textformat": _n},
+        "/Leds/Bulk": {"initial": 0, "textformat": _n},
+        "/Leds/Float": {"initial": 0, "textformat": _n},
+        "/Leds/Inverter": {"initial": 1, "textformat": _n},
+        "/Leds/LowBattery": {"initial": 0, "textformat": _n},
+        "/Leds/Mains": {"initial": 1, "textformat": _n},
+        "/Leds/Overload": {"initial": 0, "textformat": _n},
+        "/Leds/Temperature": {"initial": 0, "textformat": _n},
+        "/Mode": {"initial": 3, "textformat": _n},
+        "/ModeIsAdjustable": {"initial": 1, "textformat": _n},
+        "/PvInverter/Disable": {"initial": 1, "textformat": _n},
+        "/Quirks": {"initial": 0, "textformat": _n},
+        "/RedetectSystem": {"initial": 0, "textformat": _n},
+        "/Settings/Alarm/System/GridLost": {"initial": 1, "textformat": _n},
+        "/Settings/SystemSetup/AcInput1": {"initial": 1, "textformat": _n},
+        "/Settings/SystemSetup/AcInput2": {"initial": 0, "textformat": _n},
+        "/ShortIds": {"initial": 1, "textformat": _n},
+        "/Soc": {"initial": None, "textformat": _percent},
+        "/State": {"initial": 3, "textformat": _n},
+        "/SystemReset": {"initial": None, "textformat": _n},
+        "/VebusChargeState": {"initial": 1, "textformat": _n},
+        "/VebusError": {"initial": 0, "textformat": _n},
+        "/VebusMainState": {"initial": 9, "textformat": _n},
         # ----
-        "/UpdateIndex": {"initial": 0},
+        "/UpdateIndex": {"initial": 0, "textformat": _n},
     }
 
     DbusMultiPlusEmulator(
