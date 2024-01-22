@@ -16,11 +16,31 @@ There is nothing specific to configure and it should work out of the box. If you
 
 ### Install
 
-To run the script in the background:
+1. Login to your Venus OS device via SSH. See [Venus OS:Root Access](https://www.victronenergy.com/live/ccgx:root_access#root_access) for more details.
 
-1. Copy the `dbus-multiplus-emulator` folder to `/data/etc` on your Venus OS device
+2. Execute this commands to download and extract the files:
 
-2. Run `bash /data/etc/dbus-multiplus-emulator/install.sh` as root
+    ```bash
+    # change to temp folder
+    cd /tmp
+
+    # download driver
+    wget -O /tmp/venus-os_dbus-multiplus-emulator.zip https://github.com/mr-manuel/venus-os_dbus-multiplus-emulator/archive/refs/heads/master.zip
+
+    # If updating: cleanup old folder
+    rm -rf /tmp/venus-os_dbus-multiplus-emulator-master
+
+    # unzip folder
+    unzip venus-os_dbus-multiplus-emulator.zip
+
+    # If updating: cleanup existing driver
+    rm -rf /data/etc/dbus-multiplus-emulator
+
+    # copy files
+    cp -R /tmp/venus-os_dbus-multiplus-emulator-master/dbus-multiplus-emulator/ /data/etc/
+    ```
+
+3. Run `bash /data/etc/dbus-multiplus-emulator/install.sh` to install the driver as service.
 
    The daemon-tools should start this service automatically within seconds.
 
