@@ -12,7 +12,7 @@ You like the project and you want to support me?
 [<img src="https://github.md0.eu/uploads/donate-button.svg" height="50">](https://www.paypal.com/donate/?hosted_button_id=3NEVZBDM5KABW)
 
 ## Config
-There is nothing specific to configure and it should work out of the box. If you have multiple grid meters, batteries or phases, then a configuration is maybe needed. In this case edit the `dbus-multiplus-emulator.py` and search for the `USER CHANGABLE VALUES | START` section.
+There is nothing specific to configure and it should work out of the box for systems that have only `L1`. If you have multiple phases, grid meters and/or batteries, then a configuration is maybe needed. In this case edit the `dbus-multiplus-emulator.py` and search for the `USER CHANGABLE VALUES | START` section.
 
 ### Install
 
