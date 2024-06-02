@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.1.0
+* Added: Support for three phases
+* Added: Some fields
+
 ## v0.0.3
 * Added: Energy sum of power from `Out to Inverter` and `Inverter to Out`
 * Added: LED display
