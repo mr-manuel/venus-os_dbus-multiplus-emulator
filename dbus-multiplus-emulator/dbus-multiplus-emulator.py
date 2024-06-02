@@ -23,6 +23,10 @@ logging.basicConfig(level=logging.WARNING)
 # enter grid frequency
 grid_frequency = 50.0000
 
+# enter grid nominal voltage
+# e.g. 230.0 for Europe, 120.0 for UK/US
+grid_nominal_voltage = 230.0
+
 # enter the dbusServiceName from which the battery data should be fetched, if there is more than one
 # e.g. com.victronenergy.battery.mqtt_battery_41
 dbusServiceNameBattery = ""
@@ -31,10 +35,16 @@ dbusServiceNameBattery = ""
 # e.g. com.victronenergy.grid.mqtt_grid_31
 dbusServiceNameGrid = ""
 
+hub__charge_voltage = 55.2
+
 # specify on which phase the AC PV Inverter is connected
 # e.g. L1, L2 or L3
 # default: L1
 phase = "L1"
+phase_used = ["L1", "L2", "L3"]
+
+# specify how many phases are connected
+phase_count = 3
 
 # ------------------ USER CHANGABLE VALUES | END --------------------
 
@@ -108,7 +118,7 @@ class DbusMultiPlusEmulator:
         self._dbusservice.add_path("/ProductId", 2623)  # ok
         self._dbusservice.add_path("/ProductName", productname)  # ok
         self._dbusservice.add_path("/CustomName", "")  # ok
-        self._dbusservice.add_path("/FirmwareVersion", 1175)  # ok
+        self._dbusservice.add_path("/FirmwareVersion", 1296)  # ok
         self._dbusservice.add_path("/HardwareVersion", "0.0.3 (20230821)")
         self._dbusservice.add_path("/Connected", 1)  # ok
 
@@ -186,6 +196,9 @@ class DbusMultiPlusEmulator:
                     "/Ac/L1/Voltage": dummy,
                     "/Ac/L2/Voltage": dummy,
                     "/Ac/L3/Voltage": dummy,
+                    "/Ac/L1/Frequency": dummy,
+                    "/Ac/L2/Frequency": dummy,
+                    "/Ac/L3/Frequency": dummy,
                     # ---
                     "/Ac/Power": dummy,
                     "/Ac/Current": dummy,
@@ -204,6 +217,9 @@ class DbusMultiPlusEmulator:
             "/Ac/L1/Voltage": None,
             "/Ac/L2/Voltage": None,
             "/Ac/L3/Voltage": None,
+            "/Ac/L1/Frequency": None,
+            "/Ac/L2/Frequency": None,
+            "/Ac/L3/Frequency": None,
             # ---
             "/Ac/Power": None,
             "/Ac/Current": None,
@@ -299,6 +315,7 @@ class DbusMultiPlusEmulator:
             if self.batteryValues["/Dc/0/Power"] is not None
             else 0
         )
+
         ac_in_power_key = "/Ac/" + phase + "/Power"
         ac_in_power = (
             self.gridValues[ac_in_power_key]
@@ -315,16 +332,16 @@ class DbusMultiPlusEmulator:
         ac_out_power = round(0 - dc_power - ac_in_power)
 
         ac_in = {
-            "current": round(ac_in_power / ac_in_voltage, 2)
-            if ac_in_voltage > 0
-            else 0,
+            "current": (
+                round(ac_in_power / ac_in_voltage, 2) if ac_in_voltage > 0 else 0
+            ),
             "power": ac_in_power,
             "voltage": ac_in_voltage,
         }
         ac_out = {
-            "current": round(ac_out_power / ac_in_voltage, 2)
-            if ac_in_voltage > 0
-            else 0,
+            "current": (
+                round(ac_out_power / ac_in_voltage, 2) if ac_in_voltage > 0 else 0
+            ),
             "power": ac_out_power,
             "voltage": ac_in_voltage,
         }
@@ -332,7 +349,7 @@ class DbusMultiPlusEmulator:
         # ##################################################################################################################
 
         # # # calculate watthours
-        # measure power and calculate watthours, since enphase provides only watthours for production/import/consumption and no export
+        # measure power and calculate watthours, since it provides only watthours for production/import/consumption and no export
         # divide charging and discharging from dc
         # charging (+)
         dc_power_charging = dc_power if dc_power > 0 else 0
@@ -346,15 +363,19 @@ class DbusMultiPlusEmulator:
         if data_watt_hours["time_creation"] + data_watt_hours_timespan > timestamp:
             data_watt_hours_dc = {
                 "charging": round(
-                    data_watt_hours["dc"]["charging"] + dc_power_charging
-                    if "dc" in data_watt_hours
-                    else dc_power_charging,
+                    (
+                        data_watt_hours["dc"]["charging"] + dc_power_charging
+                        if "dc" in data_watt_hours
+                        else dc_power_charging
+                    ),
                     3,
                 ),
                 "discharging": round(
-                    data_watt_hours["dc"]["discharging"] + dc_power_discharging
-                    if "dc" in data_watt_hours
-                    else dc_power_discharging,
+                    (
+                        data_watt_hours["dc"]["discharging"] + dc_power_discharging
+                        if "dc" in data_watt_hours
+                        else dc_power_discharging
+                    ),
                     3,
                 ),
             }
@@ -455,12 +476,7 @@ class DbusMultiPlusEmulator:
 
             logging.info("--> data_watt_hours(): %s" % json.dumps(data_watt_hours))
 
-        # ##################################################################################################################
-
-        self._dbusservice["/Ac/ActiveIn/ActiveInput"] = 0
-        self._dbusservice["/Ac/ActiveIn/Connected"] = 1
-        self._dbusservice["/Ac/ActiveIn/CurrentLimit"] = 16
-        self._dbusservice["/Ac/ActiveIn/CurrentLimitIsAdjustable"] = 1
+        # update values in dbus
 
         # get values from BMS
         # for bubble flow in chart and load visualization
@@ -515,19 +531,45 @@ class DbusMultiPlusEmulator:
             ac_in["voltage"] if phase == "L3" else None
         )
 
+        # calculate total values
+        self._dbusservice["/Ac/ActiveIn/P"] = (
+            (
+                self._dbusservice["/Ac/ActiveIn/L1/P"]
+                if self._dbusservice["/Ac/ActiveIn/L1/P"] is not None
+                else 0
+            )
+            + (
+                self._dbusservice["/Ac/ActiveIn/L1/P"]
+                if self._dbusservice["/Ac/ActiveIn/L1/P"] is not None
+                else 0
+            )
+            + (
+                self._dbusservice["/Ac/ActiveIn/L3/P"]
+                if self._dbusservice["/Ac/ActiveIn/L3/P"] is not None
+                else 0
+            )
+        )
+        self._dbusservice["/Ac/ActiveIn/S"] = (
+            (
+                self._dbusservice["/Ac/ActiveIn/L1/S"]
+                if self._dbusservice["/Ac/ActiveIn/L1/S"] is not None
+                else 0
+            )
+            + (
+                self._dbusservice["/Ac/ActiveIn/L1/S"]
+                if self._dbusservice["/Ac/ActiveIn/L1/S"] is not None
+                else 0
+            )
+            + (
+                self._dbusservice["/Ac/ActiveIn/L3/S"]
+                if self._dbusservice["/Ac/ActiveIn/L3/S"] is not None
+                else 0
+            )
+        )
+
         # get values from BMS
         # for bubble flow in chart and load visualization
-        self._dbusservice["/Ac/ActiveIn/P"] = ac_in["power"]
-        self._dbusservice["/Ac/ActiveIn/S"] = ac_in["power"]
-
-        self._dbusservice["/Ac/In/1/CurrentLimit"] = 16
-        self._dbusservice["/Ac/In/1/CurrentLimitIsAdjustable"] = 1
-
-        self._dbusservice["/Ac/In/2/CurrentLimit"] = None
-        self._dbusservice["/Ac/In/2/CurrentLimitIsAdjustable"] = None
-
-        self._dbusservice["/Ac/NumberOfAcInputs"] = 1
-        self._dbusservice["/Ac/NumberOfPhases"] = 1
+        self._dbusservice["/Ac/NumberOfPhases"] = phase_count
 
         # L1 ----
         self._dbusservice["/Ac/Out/L1/F"] = grid_frequency if phase == "L1" else None
@@ -559,56 +601,58 @@ class DbusMultiPlusEmulator:
         self._dbusservice["/Ac/Out/L3/S"] = None if phase == "L3" else None
         self._dbusservice["/Ac/Out/L3/V"] = None if phase == "L3" else None
 
-        self._dbusservice["/Ac/Out/NominalInverterPower"] = 4500
-        self._dbusservice["/Ac/Out/P"] = ac_out["power"]
-        self._dbusservice["/Ac/Out/S"] = ac_out["power"]
-
-        self._dbusservice["/Ac/PowerMeasurementType"] = 4
-        self._dbusservice["/Ac/State/IgnoreAcIn1"] = 0
-        self._dbusservice["/Ac/State/SplitPhaseL2Passthru"] = None
-
-        self._dbusservice["/Alarms/HighDcCurrent"] = 0
-        self._dbusservice["/Alarms/HighDcVoltage"] = 0
-        self._dbusservice["/Alarms/HighTemperature"] = 0
-        self._dbusservice["/Alarms/L1/HighTemperature"] = 0
-        self._dbusservice["/Alarms/L1/LowBattery"] = 0
-        self._dbusservice["/Alarms/L1/Overload"] = 0
-        self._dbusservice["/Alarms/L1/Ripple"] = 0
-        self._dbusservice["/Alarms/L2/HighTemperature"] = 0
-        self._dbusservice["/Alarms/L2/LowBattery"] = 0
-        self._dbusservice["/Alarms/L2/Overload"] = 0
-        self._dbusservice["/Alarms/L2/Ripple"] = 0
-        self._dbusservice["/Alarms/L3/HighTemperature"] = 0
-        self._dbusservice["/Alarms/L3/LowBattery"] = 0
-        self._dbusservice["/Alarms/L3/Overload"] = 0
-        self._dbusservice["/Alarms/L3/Ripple"] = 0
-        self._dbusservice["/Alarms/LowBattery"] = 0
-        self._dbusservice["/Alarms/Overload"] = 0
-        self._dbusservice["/Alarms/PhaseRotation"] = 0
-        self._dbusservice["/Alarms/Ripple"] = 0
-        self._dbusservice["/Alarms/TemperatureSensor"] = 0
-        self._dbusservice["/Alarms/VoltageSensor"] = 0
-
-        self._dbusservice["/BatteryOperationalLimits/BatteryLowVoltage"] = None
-        self._dbusservice[
-            "/BatteryOperationalLimits/MaxChargeCurrent"
-        ] = self.batteryValues["/Info/MaxChargeCurrent"]
-        self._dbusservice[
-            "/BatteryOperationalLimits/MaxChargeVoltage"
-        ] = self.batteryValues["/Info/MaxChargeVoltage"]
-        self._dbusservice[
-            "/BatteryOperationalLimits/MaxDischargeCurrent"
-        ] = self.batteryValues["/Info/MaxDischargeCurrent"]
-        self._dbusservice["/BatterySense/Temperature"] = None
-        self._dbusservice["/BatterySense/Voltage"] = None
-
-        self._dbusservice["/Bms/AllowToCharge"] = 1
-        self._dbusservice["/Bms/AllowToChargeRate"] = 0
-        self._dbusservice["/Bms/AllowToDischarge"] = 1
-        self._dbusservice["/Bms/BmsExpected"] = 0
-        self._dbusservice["/Bms/BmsType"] = 0
-        self._dbusservice["/Bms/Error"] = 0
-        self._dbusservice["/Bms/PreAlarm"] = None
+        # calculate total values
+        self._dbusservice["/Ac/Out/NominalInverterPower"] = (
+            (
+                self._dbusservice["/Ac/Out/L1/NominalInverterPower"]
+                if self._dbusservice["/Ac/Out/L1/NominalInverterPower"] is not None
+                else 0
+            )
+            + (
+                self._dbusservice["/Ac/Out/L2/NominalInverterPower"]
+                if self._dbusservice["/Ac/Out/L2/NominalInverterPower"] is not None
+                else 0
+            )
+            + (
+                self._dbusservice["/Ac/Out/L3/NominalInverterPower"]
+                if self._dbusservice["/Ac/Out/L3/NominalInverterPower"] is not None
+                else 0
+            )
+        )
+        self._dbusservice["/Ac/Out/P"] = (
+            (
+                self._dbusservice["/Ac/Out/L1/P"]
+                if self._dbusservice["/Ac/Out/L1/P"] is not None
+                else 0
+            )
+            + (
+                self._dbusservice["/Ac/Out/L2/P"]
+                if self._dbusservice["/Ac/Out/L2/P"] is not None
+                else 0
+            )
+            + (
+                self._dbusservice["/Ac/Out/L3/P"]
+                if self._dbusservice["/Ac/Out/L3/P"] is not None
+                else 0
+            )
+        )
+        self._dbusservice["/Ac/Out/S"] = (
+            (
+                self._dbusservice["/Ac/Out/L1/S"]
+                if self._dbusservice["/Ac/Out/L1/S"] is not None
+                else 0
+            )
+            + (
+                self._dbusservice["/Ac/Out/L2/S"]
+                if self._dbusservice["/Ac/Out/L2/S"] is not None
+                else 0
+            )
+            + (
+                self._dbusservice["/Ac/Out/L3/S"]
+                if self._dbusservice["/Ac/Out/L3/S"] is not None
+                else 0
+            )
+        )
 
         # get values from BMS
         # for bubble flow in GUI
@@ -621,63 +665,26 @@ class DbusMultiPlusEmulator:
         self._dbusservice["/Dc/0/Voltage"] = (
             self.batteryValues["/Dc/0/Voltage"]
             if self.batteryValues["/Dc/0/Voltage"] is not None
-            else round(
-                self.batteryValues["/Dc/0/Power"] / self.batteryValues["/Dc/0/Current"],
-                2,
+            else (
+                round(
+                    self.batteryValues["/Dc/0/Power"]
+                    / self.batteryValues["/Dc/0/Current"],
+                    2,
+                )
+                if self.batteryValues["/Dc/0/Power"] is not None
+                and self.batteryValues["/Dc/0/Current"] is not None
+                else None
             )
-            if self.batteryValues["/Dc/0/Power"] is not None
-            and self.batteryValues["/Dc/0/Current"] is not None
-            else None
         )
 
-        # self._dbusservice['/Devices/0/Assistants'] = 0
+        self._dbusservice["/Devices/0/Uptime"] = int(time()) - time_driver_started
 
-        self._dbusservice["/Devices/0/ExtendStatus/ChargeDisabledDueToLowTemp"] = 0
-        self._dbusservice["/Devices/0/ExtendStatus/ChargeIsDisabled"] = None
-        self._dbusservice["/Devices/0/ExtendStatus/GridRelayReport/Code"] = None
-        self._dbusservice["/Devices/0/ExtendStatus/GridRelayReport/Count"] = 0
-        self._dbusservice["/Devices/0/ExtendStatus/GridRelayReport/Reset"] = 0
-        self._dbusservice["/Devices/0/ExtendStatus/HighDcCurrent"] = 0
-        self._dbusservice["/Devices/0/ExtendStatus/HighDcVoltage"] = 0
-        self._dbusservice["/Devices/0/ExtendStatus/IgnoreAcIn1"] = 0
-        self._dbusservice["/Devices/0/ExtendStatus/MainsPllLocked"] = 1
-        self._dbusservice["/Devices/0/ExtendStatus/PcvPotmeterOnZero"] = 0
-        self._dbusservice["/Devices/0/ExtendStatus/PowerPackPreOverload"] = 0
-        self._dbusservice["/Devices/0/ExtendStatus/SocTooLowToInvert"] = 0
-        self._dbusservice["/Devices/0/ExtendStatus/SustainMode"] = 0
-        self._dbusservice["/Devices/0/ExtendStatus/SwitchoverInfo/Connecting"] = 0
-        self._dbusservice["/Devices/0/ExtendStatus/SwitchoverInfo/Delay"] = 0
-        self._dbusservice["/Devices/0/ExtendStatus/SwitchoverInfo/ErrorFlags"] = 0
-        self._dbusservice["/Devices/0/ExtendStatus/TemperatureHighForceBypass"] = 0
-        self._dbusservice["/Devices/0/ExtendStatus/VeBusNetworkQualityCounter"] = 0
-        self._dbusservice["/Devices/0/ExtendStatus/WaitingForRelayTest"] = 0
+        if phase_count >= 2:
+            self._dbusservice["/Devices/1/Uptime"] = int(time()) - time_driver_started
 
-        self._dbusservice["/Devices/0/InterfaceProtectionLog/0/ErrorFlags"] = None
-        self._dbusservice["/Devices/0/InterfaceProtectionLog/0/Time"] = None
-        self._dbusservice["/Devices/0/InterfaceProtectionLog/1/ErrorFlags"] = None
-        self._dbusservice["/Devices/0/InterfaceProtectionLog/1/Time"] = None
-        self._dbusservice["/Devices/0/InterfaceProtectionLog/2/ErrorFlags"] = None
-        self._dbusservice["/Devices/0/InterfaceProtectionLog/2/Time"] = None
-        self._dbusservice["/Devices/0/InterfaceProtectionLog/3/ErrorFlags"] = None
-        self._dbusservice["/Devices/0/InterfaceProtectionLog/3/Time"] = None
-        self._dbusservice["/Devices/0/InterfaceProtectionLog/4/ErrorFlags"] = None
-        self._dbusservice["/Devices/0/InterfaceProtectionLog/4/Time"] = None
+        if phase_count == 3:
+            self._dbusservice["/Devices/2/Uptime"] = int(time()) - time_driver_started
 
-        self._dbusservice["/Devices/0/SerialNumber"] = "HQ00000AA01"
-        self._dbusservice["/Devices/0/Version"] = 2623497
-
-        self._dbusservice["/Devices/Bms/Version"] = None
-        self._dbusservice["/Devices/Dmc/Version"] = None
-        self._dbusservice["/Devices/NumberOfMultis"] = 1
-
-        # self._dbusservice["/Energy/AcIn1ToAcOut"] = 0
-        # self._dbusservice["/Energy/AcIn1ToInverter"] = 0
-        # self._dbusservice["/Energy/AcIn2ToAcOut"] = 0
-        # self._dbusservice["/Energy/AcIn2ToInverter"] = 0
-        # self._dbusservice["/Energy/AcOutToAcIn1"] = 0
-        # self._dbusservice["/Energy/AcOutToAcIn2"] = 0
-        # self._dbusservice["/Energy/InverterToAcIn1"] = 0
-        # self._dbusservice["/Energy/InverterToAcIn2"] = 0
         self._dbusservice["/Energy/InverterToAcOut"] = (
             json_data["dc"]["discharging"]
             if "dc" in json_data and "discharging" in json_data["dc"]
@@ -688,36 +695,6 @@ class DbusMultiPlusEmulator:
             if "dc" in json_data and "charging" in json_data["dc"]
             else 0
         )
-        # self._dbusservice["/ExtraBatteryCurrent"] = 0
-
-        self._dbusservice["/FirmwareFeatures/BolFrame"] = 1
-        self._dbusservice["/FirmwareFeatures/BolUBatAndTBatSense"] = 1
-        self._dbusservice["/FirmwareFeatures/CommandWriteViaId"] = 1
-        self._dbusservice["/FirmwareFeatures/IBatSOCBroadcast"] = 1
-        self._dbusservice["/FirmwareFeatures/NewPanelFrame"] = 1
-        self._dbusservice["/FirmwareFeatures/SetChargeState"] = 1
-        self._dbusservice["/FirmwareSubVersion"] = 0
-
-        self._dbusservice["/Hub/ChargeVoltage"] = 55.2
-        self._dbusservice["/Hub4/AssistantId"] = 5
-        self._dbusservice["/Hub4/DisableCharge"] = 0
-        self._dbusservice["/Hub4/DisableFeedIn"] = 0
-        self._dbusservice["/Hub4/DoNotFeedInOvervoltage"] = 1
-        self._dbusservice["/Hub4/FixSolarOffsetTo100mV"] = 1
-        self._dbusservice["/Hub4/L1/AcPowerSetpoint"] = 0
-        self._dbusservice["/Hub4/L1/CurrentLimitedDueToHighTemp"] = 0
-        self._dbusservice["/Hub4/L1/FrequencyVariationOccurred"] = 0
-        self._dbusservice["/Hub4/L1/MaxFeedInPower"] = 32766
-        self._dbusservice["/Hub4/L1/OffsetAddedToVoltageSetpoint"] = 0
-        self._dbusservice["/Hub4/Sustain"] = 0
-        self._dbusservice["/Hub4/TargetPowerIsMaxFeedIn"] = 0
-
-        # '/Interfaces/Mk2/Connection'] = '/dev/ttyS3'
-        # '/Interfaces/Mk2/ProductId'] = 4464
-        # '/Interfaces/Mk2/ProductName'] = 'MK3'
-        # '/Interfaces/Mk2/Status/BusFreeMode'] = 1
-        # '/Interfaces/Mk2/Tunnel'] = None
-        # '/Interfaces/Mk2/Version'] = 1170212
 
         self._dbusservice["/Leds/Absorption"] = (
             1 if self.batteryValues["/Info/ChargeMode"].startswith("Absorption") else 0
@@ -728,27 +705,7 @@ class DbusMultiPlusEmulator:
         self._dbusservice["/Leds/Float"] = (
             1 if self.batteryValues["/Info/ChargeMode"].startswith("Float") else 0
         )
-        self._dbusservice["/Leds/Inverter"] = 1
-        self._dbusservice["/Leds/LowBattery"] = 0
-        self._dbusservice["/Leds/Mains"] = 1
-        self._dbusservice["/Leds/Overload"] = 0
-        self._dbusservice["/Leds/Temperature"] = 0
-
-        self._dbusservice["/Mode"] = 3
-        self._dbusservice["/ModeIsAdjustable"] = 1
-        self._dbusservice["/PvInverter/Disable"] = 0
-        self._dbusservice["/Quirks"] = 0
-        self._dbusservice["/RedetectSystem"] = 0
-        self._dbusservice["/Settings/Alarm/System/GridLost"] = 1
-        self._dbusservice["/Settings/SystemSetup/AcInput1"] = 1
-        self._dbusservice["/Settings/SystemSetup/AcInput2"] = 0
-        self._dbusservice["/ShortIds"] = 1
         self._dbusservice["/Soc"] = self.batteryValues["/Soc"]
-        self._dbusservice["/State"] = 8
-        self._dbusservice["/SystemReset"] = None
-        self._dbusservice["/VebusChargeState"] = 1
-        self._dbusservice["/VebusError"] = 0
-        self._dbusservice["/VebusMainState"] = 9
 
         # increment UpdateIndex - to show that new data is available
         index = self._dbusservice["/UpdateIndex"] + 1  # increment index
@@ -763,7 +720,383 @@ class DbusMultiPlusEmulator:
         return True  # accept the change
 
 
+def create_device_dbus_paths(device_number: int = 0):
+    """
+    Create the dbus paths for the device.
+    """
+
+    global _w, _n, _v
+
+    paths_dbus = {
+        f"/Devices/{device_number}/Ac/In/L2/P": {"initial": None, "textformat": _w},
+        f"/Devices/{device_number}/Ac/In/P": {"initial": None, "textformat": _w},
+        f"/Devices/{device_number}/Ac/Inverter/P": {"initial": None, "textformat": _w},
+        f"/Devices/{device_number}/Ac/Out/L2/P": {"initial": None, "textformat": _w},
+        f"/Devices/{device_number}/Ac/Out/P": {"initial": None, "textformat": _w},
+        f"/Devices/{device_number}/Assistants": {
+            "initial": [
+                139,
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+            ],
+            "textformat": None,
+        },
+        f"/Devices/{device_number}/CNBFirmwareVersion": {
+            "initial": 2204156,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/Diagnostics/UBatRipple": {
+            "initial": None,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/Diagnostics/UBatTerminal": {
+            "initial": None,
+            "textformat": _v,
+        },
+        f"/Devices/{device_number}/Diagnostics/UBatVSense": {
+            "initial": None,
+            "textformat": _v,
+        },
+        f"/Devices/{device_number}/ErrorAndWarningFlags/NSErrConnectFrustratedByRelayTest": {
+            "initial": 0,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/ErrorAndWarningFlags/NSErrRelayTestKeepsFailing": {
+            "initial": 0,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/ErrorAndWarningFlags/RawFlags": {
+            "initial": 0,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/ErrorAndWarningFlags/WarnRelayTestRecentlyFailed": {
+            "initial": 0,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/ExtendStatus/AcIn1Available": {
+            "initial": 1,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/ExtendStatus/BolTimeoutOccured": {
+            "initial": 0,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/ExtendStatus/ChargeDisabledDueToLowTemp": {
+            "initial": 0,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/ExtendStatus/ChargeIsDisabled": {
+            "initial": 0,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/ExtendStatus/DMCGeneratorSelected": {
+            "initial": 0,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/ExtendStatus/GridRelayReport/Code": {
+            "initial": None,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/ExtendStatus/GridRelayReport/Count": {
+            "initial": None,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/ExtendStatus/GridRelayReport/Reset": {
+            "initial": 0,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/ExtendStatus/HighDcCurrent": {
+            "initial": 0,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/ExtendStatus/HighDcVoltage": {
+            "initial": 0,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/ExtendStatus/IgnoreAcIn1": {
+            "initial": 0,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/ExtendStatus/IgnoreAcIn1AssistantsVs": {
+            "initial": 0,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/ExtendStatus/MainsPllLocked": {
+            "initial": 1,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/ExtendStatus/NPFGeneratorSelected": {
+            "initial": 0,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/ExtendStatus/PcvPotmeterOnZero": {
+            "initial": 0,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/ExtendStatus/PowerPackPreOverload": {
+            "initial": 0,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/ExtendStatus/PreferRenewableEnergy": {
+            "initial": 0,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/ExtendStatus/PreferRenewableEnergyActive": {
+            "initial": 0,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/ExtendStatus/RawFlags0": {
+            "initial": 268697648,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/ExtendStatus/RawFlags1": {
+            "initial": None,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/ExtendStatus/RelayTestOk": {
+            "initial": 1,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/ExtendStatus/SocTooLowToInvert": {
+            "initial": 0,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/ExtendStatus/SustainMode": {
+            "initial": 0,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/ExtendStatus/SwitchoverInfo/Connecting": {
+            "initial": 0,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/ExtendStatus/SwitchoverInfo/Delay": {
+            "initial": 0,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/ExtendStatus/SwitchoverInfo/ErrorFlags": {
+            "initial": 0,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/ExtendStatus/TemperatureHighForceBypass": {
+            "initial": 0,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/ExtendStatus/VeBusNetworkQualityCounter": {
+            "initial": 0,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/ExtendStatus/WaitingForRelayTest": {
+            "initial": 0,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/FirmwareSubVersion": {
+            "initial": 0,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/FirmwareVersion": {
+            "initial": 1296,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/Info/DeltaTBatNominalTBatMinimum": {
+            "initial": 45,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/Info/MaximumRelayCurrentAC1": {
+            "initial": 50,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/Info/MaximumRelayCurrentAC2": {
+            "initial": 0,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/InterfaceProtectionLog/0/ErrorFlags": {
+            "initial": None,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/InterfaceProtectionLog/0/Time": {
+            "initial": None,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/InterfaceProtectionLog/1/ErrorFlags": {
+            "initial": None,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/InterfaceProtectionLog/1/Time": {
+            "initial": None,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/InterfaceProtectionLog/2/ErrorFlags": {
+            "initial": None,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/InterfaceProtectionLog/2/Time": {
+            "initial": None,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/InterfaceProtectionLog/3/ErrorFlags": {
+            "initial": None,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/InterfaceProtectionLog/3/Time": {
+            "initial": None,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/InterfaceProtectionLog/4/ErrorFlags": {
+            "initial": None,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/InterfaceProtectionLog/4/Time": {
+            "initial": None,
+            "textformat": _n,
+        },
+        # ----
+        f"/Devices/{device_number}/ProductId": {
+            "initial": 9763,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/SerialNumber": {
+            "initial": "HQ00000AA0" + str(device_number + 1),
+            "textformat": _s,
+        },
+        f"/Devices/{device_number}/Settings/AssistCurrentBoostFactor": {
+            "initial": 2.0,
+            "textformat": _n1,
+        },
+        f"/Devices/{device_number}/Settings/InverterOutputVoltage": {
+            "initial": 230.0,
+            "textformat": _n1,
+        },
+        f"/Devices/{device_number}/Settings/PowerAssistEnabled": {
+            "initial": False,
+            "textformat": None,
+        },
+        f"/Devices/{device_number}/Settings/ReadProgress": {
+            "initial": 100,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/Settings/ResetRequired": {
+            "initial": 0,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/Settings/UpsFunction": {
+            "initial": False,
+            "textformat": None,
+        },
+        f"/Devices/{device_number}/Settings/WriteProgress": {
+            "initial": None,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/UpTime": {
+            "initial": 0,
+            "textformat": _n,
+        },
+        f"/Devices/{device_number}/Version": {"initial": 2987520, "textformat": _s},
+    }
+
+    return paths_dbus
+
+
+# formatting
+def _wh(p, v):
+    return str("%.2f" % v) + "Wh"
+
+
+def _a(p, v):
+    return str("%.2f" % v) + "A"
+
+
+def _w(p, v):
+    return str("%i" % v) + "W"
+
+
+def _va(p, v):
+    return str("%i" % v) + "VA"
+
+
+def _v(p, v):
+    return str("%i" % v) + "V"
+
+
+def _hz(p, v):
+    return str("%.4f" % v) + "Hz"
+
+
+def _c(p, v):
+    return str("%i" % v) + "°C"
+
+
+def _percent(p, v):
+    return str("%.1f" % v) + "%"
+
+
+def _n(p, v):
+    return str("%i" % v)
+
+
+def _n1(p, v):
+    return str("%.1f" % v)
+
+
+def _s(p, v):
+    return str("%s" % v)
+
+
 def main():
+    global time_driver_started
+
     _thread.daemon = True  # allow the program to quit
 
     from dbus.mainloop.glib import DBusGMainLoop
@@ -771,41 +1104,10 @@ def main():
     # Have a mainloop, so we can send/receive asynchronous calls to and from dbus
     DBusGMainLoop(set_as_default=True)
 
-    # formatting
-    def _kwh(p, v):
-        return str("%.2f" % v) + "kWh"
-
-    def _a(p, v):
-        return str("%.2f" % v) + "A"
-
-    def _w(p, v):
-        return str("%i" % v) + "W"
-
-    def _va(p, v):
-        return str("%i" % v) + "VA"
-
-    def _v(p, v):
-        return str("%i" % v) + "V"
-
-    def _hz(p, v):
-        return str("%.1f" % v) + "Hz"
-
-    def _c(p, v):
-        return str("%i" % v) + "°C"
-
-    def _percent(p, v):
-        return str("%.1f" % v) + "%"
-
-    def _n(p, v):
-        return str("%i" % v)
-
-    def _s(p, v):
-        return str("%s" % v)
-
-    paths_dbus = {
+    paths_multiplus_dbus = {
         "/Ac/ActiveIn/ActiveInput": {"initial": 0, "textformat": _n},
         "/Ac/ActiveIn/Connected": {"initial": 1, "textformat": _n},
-        "/Ac/ActiveIn/CurrentLimit": {"initial": 16, "textformat": _a},
+        "/Ac/ActiveIn/CurrentLimit": {"initial": 50.0, "textformat": _a},
         "/Ac/ActiveIn/CurrentLimitIsAdjustable": {"initial": 1, "textformat": _n},
         # ----
         "/Ac/ActiveIn/L1/F": {"initial": None, "textformat": _hz},
@@ -829,14 +1131,17 @@ def main():
         "/Ac/ActiveIn/P": {"initial": 0, "textformat": _w},
         "/Ac/ActiveIn/S": {"initial": 0, "textformat": _va},
         # ----
-        "/Ac/In/1/CurrentLimit": {"initial": 16, "textformat": _a},
+        "/Ac/Control/IgnoreAcIn1": {"initial": 0, "textformat": _n},
+        "/Ac/Control/RemoteGeneratorSelected": {"initial": 0, "textformat": _n},
+        # ----
+        "/Ac/In/1/CurrentLimit": {"initial": 50.0, "textformat": _a},
         "/Ac/In/1/CurrentLimitIsAdjustable": {"initial": 1, "textformat": _n},
         # ----
         "/Ac/In/2/CurrentLimit": {"initial": None, "textformat": _a},
         "/Ac/In/2/CurrentLimitIsAdjustable": {"initial": None, "textformat": _n},
         # ----
         "/Ac/NumberOfAcInputs": {"initial": 1, "textformat": _n},
-        "/Ac/NumberOfPhases": {"initial": 1, "textformat": _n},
+        "/Ac/NumberOfPhases": {"initial": phase_count, "textformat": _n},
         # ----
         "/Ac/Out/L1/F": {"initial": None, "textformat": _hz},
         "/Ac/Out/L1/I": {"initial": None, "textformat": _a},
@@ -859,27 +1164,95 @@ def main():
         "/Ac/Out/L3/S": {"initial": None, "textformat": _va},
         "/Ac/Out/L3/V": {"initial": None, "textformat": _v},
         # ----
-        "/Ac/Out/NominalInverterPower": {"initial": 4500, "textformat": _w},
+        "/Ac/Out/NominalInverterPower": {"initial": None, "textformat": _w},
         "/Ac/Out/P": {"initial": 0, "textformat": _w},
         "/Ac/Out/S": {"initial": 0, "textformat": _va},
         # ----
         "/Ac/PowerMeasurementType": {"initial": 4, "textformat": _n},
+        "/Ac/State/AcIn1Available": {"initial": 1, "textformat": _n},
         "/Ac/State/IgnoreAcIn1": {"initial": 0, "textformat": _n},
+        "/Ac/State/RemoteGeneratorSelected": {"initial": 0, "textformat": _n},
+        "/Ac/State/SplitPhaseL2L1OutSummed": {"initial": None, "textformat": _n},
         "/Ac/State/SplitPhaseL2Passthru": {"initial": None, "textformat": _n},
         # ----
+        "/AcSensor/0/Current": {"initial": None, "textformat": _a},
+        "/AcSensor/0/Energy": {"initial": None, "textformat": _wh},
+        "/AcSensor/0/Location": {"initial": None, "textformat": _s},
+        "/AcSensor/0/Phase": {"initial": None, "textformat": _n},
+        "/AcSensor/0/Power": {"initial": None, "textformat": _w},
+        "/AcSensor/0/Voltage": {"initial": None, "textformat": _v},
+        "/AcSensor/1/Current": {"initial": None, "textformat": _a},
+        "/AcSensor/1/Energy": {"initial": None, "textformat": _wh},
+        "/AcSensor/1/Location": {"initial": None, "textformat": _s},
+        "/AcSensor/1/Phase": {"initial": None, "textformat": _n},
+        "/AcSensor/1/Power": {"initial": None, "textformat": _w},
+        "/AcSensor/1/Voltage": {"initial": None, "textformat": _v},
+        "/AcSensor/2/Current": {"initial": None, "textformat": _a},
+        "/AcSensor/2/Energy": {"initial": None, "textformat": _wh},
+        "/AcSensor/2/Location": {"initial": None, "textformat": _s},
+        "/AcSensor/2/Phase": {"initial": None, "textformat": _n},
+        "/AcSensor/2/Power": {"initial": None, "textformat": _w},
+        "/AcSensor/2/Voltage": {"initial": None, "textformat": _v},
+        "/AcSensor/3/Current": {"initial": None, "textformat": _a},
+        "/AcSensor/3/Energy": {"initial": None, "textformat": _wh},
+        "/AcSensor/3/Location": {"initial": None, "textformat": _s},
+        "/AcSensor/3/Phase": {"initial": None, "textformat": _n},
+        "/AcSensor/3/Power": {"initial": None, "textformat": _w},
+        "/AcSensor/3/Voltage": {"initial": None, "textformat": _v},
+        "/AcSensor/4/Current": {"initial": None, "textformat": _a},
+        "/AcSensor/4/Energy": {"initial": None, "textformat": _wh},
+        "/AcSensor/4/Location": {"initial": None, "textformat": _s},
+        "/AcSensor/4/Phase": {"initial": None, "textformat": _n},
+        "/AcSensor/4/Power": {"initial": None, "textformat": _w},
+        "/AcSensor/4/Voltage": {"initial": None, "textformat": _v},
+        "/AcSensor/5/Current": {"initial": None, "textformat": _a},
+        "/AcSensor/5/Energy": {"initial": None, "textformat": _wh},
+        "/AcSensor/5/Location": {"initial": None, "textformat": _s},
+        "/AcSensor/5/Phase": {"initial": None, "textformat": _n},
+        "/AcSensor/5/Power": {"initial": None, "textformat": _w},
+        "/AcSensor/5/Voltage": {"initial": None, "textformat": _v},
+        "/AcSensor/6/Current": {"initial": None, "textformat": _a},
+        "/AcSensor/6/Energy": {"initial": None, "textformat": _wh},
+        "/AcSensor/6/Location": {"initial": None, "textformat": _s},
+        "/AcSensor/6/Phase": {"initial": None, "textformat": _n},
+        "/AcSensor/6/Power": {"initial": None, "textformat": _w},
+        "/AcSensor/6/Voltage": {"initial": None, "textformat": _v},
+        "/AcSensor/7/Current": {"initial": None, "textformat": _a},
+        "/AcSensor/7/Energy": {"initial": None, "textformat": _wh},
+        "/AcSensor/7/Location": {"initial": None, "textformat": _s},
+        "/AcSensor/7/Phase": {"initial": None, "textformat": _n},
+        "/AcSensor/7/Power": {"initial": None, "textformat": _w},
+        "/AcSensor/7/Voltage": {"initial": None, "textformat": _v},
+        "/AcSensor/8/Current": {"initial": None, "textformat": _a},
+        "/AcSensor/8/Energy": {"initial": None, "textformat": _wh},
+        "/AcSensor/8/Location": {"initial": None, "textformat": _s},
+        "/AcSensor/8/Phase": {"initial": None, "textformat": _n},
+        "/AcSensor/8/Power": {"initial": None, "textformat": _w},
+        "/AcSensor/8/Voltage": {"initial": None, "textformat": _v},
+        "/AcSensor/Count": {"initial": None, "textformat": _n},
+        # ----
+        "/Alarms/BmsConnectionLost": {"initial": 0, "textformat": _n},
+        "/Alarms/BmsPreAlarm": {"initial": None, "textformat": _n},
+        "/Alarms/GridLost": {"initial": 0, "textformat": _n},
         "/Alarms/HighDcCurrent": {"initial": 0, "textformat": _n},
         "/Alarms/HighDcVoltage": {"initial": 0, "textformat": _n},
         "/Alarms/HighTemperature": {"initial": 0, "textformat": _n},
         "/Alarms/L1/HighTemperature": {"initial": 0, "textformat": _n},
+        "/Alarms/L1/InverterImbalance": {"initial": 0, "textformat": _n},
         "/Alarms/L1/LowBattery": {"initial": 0, "textformat": _n},
+        "/Alarms/L1/MainsImbalance": {"initial": 0, "textformat": _n},
         "/Alarms/L1/Overload": {"initial": 0, "textformat": _n},
         "/Alarms/L1/Ripple": {"initial": 0, "textformat": _n},
         "/Alarms/L2/HighTemperature": {"initial": 0, "textformat": _n},
+        "/Alarms/L2/InverterImbalance": {"initial": 0, "textformat": _n},
         "/Alarms/L2/LowBattery": {"initial": 0, "textformat": _n},
+        "/Alarms/L2/MainsImbalance": {"initial": 0, "textformat": _n},
         "/Alarms/L2/Overload": {"initial": 0, "textformat": _n},
         "/Alarms/L2/Ripple": {"initial": 0, "textformat": _n},
         "/Alarms/L3/HighTemperature": {"initial": 0, "textformat": _n},
+        "/Alarms/L3/InverterImbalance": {"initial": 0, "textformat": _n},
         "/Alarms/L3/LowBattery": {"initial": 0, "textformat": _n},
+        "/Alarms/L3/MainsImbalance": {"initial": 0, "textformat": _n},
         "/Alarms/L3/Overload": {"initial": 0, "textformat": _n},
         "/Alarms/L3/Ripple": {"initial": 0, "textformat": _n},
         "/Alarms/LowBattery": {"initial": 0, "textformat": _n},
@@ -919,166 +1292,165 @@ def main():
         "/Dc/0/Current": {"initial": None, "textformat": _a},
         "/Dc/0/MaxChargeCurrent": {"initial": None, "textformat": _a},
         "/Dc/0/Power": {"initial": None, "textformat": _w},
+        "/Dc/0/PreferRenewableEnergy": {"initial": None, "textformat": _n},
         "/Dc/0/Temperature": {"initial": None, "textformat": _c},
         "/Dc/0/Voltage": {"initial": None, "textformat": _v},
-        # ----
-        # '/Devices/0/Assistants': {'initial': 0, "textformat": _n},
-        # ----
-        "/Devices/0/ExtendStatus/ChargeDisabledDueToLowTemp": {
-            "initial": 0,
-            "textformat": _n,
-        },
-        "/Devices/0/ExtendStatus/ChargeIsDisabled": {"initial": None, "textformat": _n},
-        "/Devices/0/ExtendStatus/GridRelayReport/Code": {
-            "initial": None,
-            "textformat": _n,
-        },
-        "/Devices/0/ExtendStatus/GridRelayReport/Count": {
-            "initial": 0,
-            "textformat": _n,
-        },
-        "/Devices/0/ExtendStatus/GridRelayReport/Reset": {
-            "initial": 0,
-            "textformat": _n,
-        },
-        "/Devices/0/ExtendStatus/HighDcCurrent": {"initial": 0, "textformat": _n},
-        "/Devices/0/ExtendStatus/HighDcVoltage": {"initial": 0, "textformat": _n},
-        "/Devices/0/ExtendStatus/IgnoreAcIn1": {"initial": 0, "textformat": _n},
-        "/Devices/0/ExtendStatus/MainsPllLocked": {"initial": 1, "textformat": _n},
-        "/Devices/0/ExtendStatus/PcvPotmeterOnZero": {"initial": 0, "textformat": _n},
-        "/Devices/0/ExtendStatus/PowerPackPreOverload": {
-            "initial": 0,
-            "textformat": _n,
-        },
-        "/Devices/0/ExtendStatus/SocTooLowToInvert": {"initial": 0, "textformat": _n},
-        "/Devices/0/ExtendStatus/SustainMode": {"initial": 0, "textformat": _n},
-        "/Devices/0/ExtendStatus/SwitchoverInfo/Connecting": {
-            "initial": 0,
-            "textformat": _n,
-        },
-        "/Devices/0/ExtendStatus/SwitchoverInfo/Delay": {
-            "initial": 0,
-            "textformat": _n,
-        },
-        "/Devices/0/ExtendStatus/SwitchoverInfo/ErrorFlags": {
-            "initial": 0,
-            "textformat": _n,
-        },
-        "/Devices/0/ExtendStatus/TemperatureHighForceBypass": {
-            "initial": 0,
-            "textformat": _n,
-        },
-        "/Devices/0/ExtendStatus/VeBusNetworkQualityCounter": {
-            "initial": 0,
-            "textformat": _n,
-        },
-        "/Devices/0/ExtendStatus/WaitingForRelayTest": {"initial": 0, "textformat": _n},
-        # ----
-        "/Devices/0/InterfaceProtectionLog/0/ErrorFlags": {
-            "initial": None,
-            "textformat": _n,
-        },
-        "/Devices/0/InterfaceProtectionLog/0/Time": {"initial": None, "textformat": _n},
-        "/Devices/0/InterfaceProtectionLog/1/ErrorFlags": {
-            "initial": None,
-            "textformat": _n,
-        },
-        "/Devices/0/InterfaceProtectionLog/1/Time": {"initial": None, "textformat": _n},
-        "/Devices/0/InterfaceProtectionLog/2/ErrorFlags": {
-            "initial": None,
-            "textformat": _n,
-        },
-        "/Devices/0/InterfaceProtectionLog/2/Time": {"initial": None, "textformat": _n},
-        "/Devices/0/InterfaceProtectionLog/3/ErrorFlags": {
-            "initial": None,
-            "textformat": _n,
-        },
-        "/Devices/0/InterfaceProtectionLog/3/Time": {"initial": None, "textformat": _n},
-        "/Devices/0/InterfaceProtectionLog/4/ErrorFlags": {
-            "initial": None,
-            "textformat": _n,
-        },
-        "/Devices/0/InterfaceProtectionLog/4/Time": {"initial": None, "textformat": _n},
-        # ----
-        "/Devices/0/SerialNumber": {"initial": "HQ00000AA01", "textformat": _s},
-        "/Devices/0/Version": {"initial": 2623497, "textformat": _s},
-        # ----
-        "/Devices/Bms/Version": {"initial": None, "textformat": _s},
-        "/Devices/Dmc/Version": {"initial": None, "textformat": _s},
-        "/Devices/NumberOfMultis": {"initial": 1, "textformat": _n},
-        # ----
-        "/Energy/AcIn1ToAcOut": {"initial": 0, "textformat": _n},
-        "/Energy/AcIn1ToInverter": {"initial": 0, "textformat": _n},
-        "/Energy/AcIn2ToAcOut": {"initial": 0, "textformat": _n},
-        "/Energy/AcIn2ToInverter": {"initial": 0, "textformat": _n},
-        "/Energy/AcOutToAcIn1": {"initial": 0, "textformat": _n},
-        "/Energy/AcOutToAcIn2": {"initial": 0, "textformat": _n},
-        "/Energy/InverterToAcIn1": {"initial": 0, "textformat": _n},
-        "/Energy/InverterToAcIn2": {"initial": 0, "textformat": _n},
-        "/Energy/InverterToAcOut": {"initial": 0, "textformat": _n},
-        "/Energy/OutToInverter": {"initial": 0, "textformat": _n},
-        "/ExtraBatteryCurrent": {"initial": 0, "textformat": _n},
-        # ----
-        "/FirmwareFeatures/BolFrame": {"initial": 1, "textformat": _n},
-        "/FirmwareFeatures/BolUBatAndTBatSense": {"initial": 1, "textformat": _n},
-        "/FirmwareFeatures/CommandWriteViaId": {"initial": 1, "textformat": _n},
-        "/FirmwareFeatures/IBatSOCBroadcast": {"initial": 1, "textformat": _n},
-        "/FirmwareFeatures/NewPanelFrame": {"initial": 1, "textformat": _n},
-        "/FirmwareFeatures/SetChargeState": {"initial": 1, "textformat": _n},
-        "/FirmwareSubVersion": {"initial": 0, "textformat": _n},
-        # ----
-        "/Hub/ChargeVoltage": {"initial": 55.2, "textformat": _n},
-        "/Hub4/AssistantId": {"initial": 5, "textformat": _n},
-        "/Hub4/DisableCharge": {"initial": 0, "textformat": _n},
-        "/Hub4/DisableFeedIn": {"initial": 0, "textformat": _n},
-        "/Hub4/DoNotFeedInOvervoltage": {"initial": 1, "textformat": _n},
-        "/Hub4/FixSolarOffsetTo100mV": {"initial": 1, "textformat": _n},
-        "/Hub4/L1/AcPowerSetpoint": {"initial": 0, "textformat": _n},
-        "/Hub4/L1/CurrentLimitedDueToHighTemp": {"initial": 0, "textformat": _n},
-        "/Hub4/L1/FrequencyVariationOccurred": {"initial": 0, "textformat": _n},
-        "/Hub4/L1/MaxFeedInPower": {"initial": 32766, "textformat": _n},
-        "/Hub4/L1/OffsetAddedToVoltageSetpoint": {"initial": 0, "textformat": _n},
-        "/Hub4/Sustain": {"initial": 0, "textformat": _n},
-        "/Hub4/TargetPowerIsMaxFeedIn": {"initial": 0, "textformat": _n},
-        # ----
-        # '/Interfaces/Mk2/Connection': {'initial': '/dev/ttyS3', "textformat": _n},
-        # '/Interfaces/Mk2/ProductId': {'initial': 4464, "textformat": _n},
-        # '/Interfaces/Mk2/ProductName': {'initial': 'MK3', "textformat": _n},
-        # '/Interfaces/Mk2/Status/BusFreeMode': {'initial': 1, "textformat": _n},
-        # '/Interfaces/Mk2/Tunnel': {'initial': None, "textformat": _n},
-        # '/Interfaces/Mk2/Version': {'initial': 1170212, "textformat": _n},
-        # ----
-        "/Leds/Absorption": {"initial": 0, "textformat": _n},
-        "/Leds/Bulk": {"initial": 0, "textformat": _n},
-        "/Leds/Float": {"initial": 0, "textformat": _n},
-        "/Leds/Inverter": {"initial": 1, "textformat": _n},
-        "/Leds/LowBattery": {"initial": 0, "textformat": _n},
-        "/Leds/Mains": {"initial": 1, "textformat": _n},
-        "/Leds/Overload": {"initial": 0, "textformat": _n},
-        "/Leds/Temperature": {"initial": 0, "textformat": _n},
-        "/Mode": {"initial": 3, "textformat": _n},
-        "/ModeIsAdjustable": {"initial": 1, "textformat": _n},
-        "/PvInverter/Disable": {"initial": 1, "textformat": _n},
-        "/Quirks": {"initial": 0, "textformat": _n},
-        "/RedetectSystem": {"initial": 0, "textformat": _n},
-        "/Settings/Alarm/System/GridLost": {"initial": 1, "textformat": _n},
-        "/Settings/SystemSetup/AcInput1": {"initial": 1, "textformat": _n},
-        "/Settings/SystemSetup/AcInput2": {"initial": 0, "textformat": _n},
-        "/ShortIds": {"initial": 1, "textformat": _n},
-        "/Soc": {"initial": None, "textformat": _percent},
-        "/State": {"initial": 3, "textformat": _n},
-        "/SystemReset": {"initial": None, "textformat": _n},
-        "/VebusChargeState": {"initial": 1, "textformat": _n},
-        "/VebusError": {"initial": 0, "textformat": _n},
-        "/VebusMainState": {"initial": 9, "textformat": _n},
-        # ----
-        "/UpdateIndex": {"initial": 0, "textformat": _n},
     }
+
+    # ----
+    # Device 0
+    # ----
+    paths_multiplus_dbus.update(create_device_dbus_paths(0))
+
+    if phase_count >= 2:
+        # ----
+        # Device 1
+        # ----
+        paths_multiplus_dbus.update(create_device_dbus_paths(1))
+
+    if phase_count == 3:
+        # ----
+        # Device 2
+        # ----
+        paths_multiplus_dbus.update(create_device_dbus_paths(2))
+
+    paths_multiplus_dbus.update(
+        {
+            # ----
+            "/Devices/Bms/Version": {"initial": None, "textformat": _s},
+            "/Devices/Dmc/Version": {"initial": None, "textformat": _s},
+            "/Devices/NumberOfMultis": {"initial": phase_count, "textformat": _n},
+            # ----
+            "/Energy/AcIn1ToAcOut": {"initial": None, "textformat": _n},
+            "/Energy/AcIn1ToInverter": {"initial": None, "textformat": _n},
+            "/Energy/AcIn2ToAcOut": {"initial": None, "textformat": _n},
+            "/Energy/AcIn2ToInverter": {"initial": None, "textformat": _n},
+            "/Energy/AcOutToAcIn1": {"initial": None, "textformat": _n},
+            "/Energy/AcOutToAcIn2": {"initial": None, "textformat": _n},
+            "/Energy/InverterToAcIn1": {"initial": None, "textformat": _n},
+            "/Energy/InverterToAcIn2": {"initial": None, "textformat": _n},
+            "/Energy/InverterToAcOut": {"initial": None, "textformat": _n},
+            "/Energy/OutToInverter": {"initial": None, "textformat": _n},
+            "/ExtraBatteryCurrent": {"initial": None, "textformat": _n},
+            # ----
+            "/FirmwareFeatures/BolFrame": {"initial": 1, "textformat": _n},
+            "/FirmwareFeatures/BolUBatAndTBatSense": {"initial": 1, "textformat": _n},
+            "/FirmwareFeatures/CommandWriteViaId": {"initial": 1, "textformat": _n},
+            "/FirmwareFeatures/IBatSOCBroadcast": {"initial": 1, "textformat": _n},
+            "/FirmwareFeatures/NewPanelFrame": {"initial": 1, "textformat": _n},
+            "/FirmwareFeatures/SetChargeState": {"initial": 1, "textformat": _n},
+            "/FirmwareSubVersion": {"initial": 0, "textformat": _n},
+            # ----
+            "/Hub/ChargeVoltage": {"initial": hub__charge_voltage, "textformat": _n},
+            "/Hub4/AssistantId": {"initial": 5, "textformat": _n},
+            "/Hub4/DisableCharge": {"initial": 0, "textformat": _n},
+            "/Hub4/DisableFeedIn": {"initial": 0, "textformat": _n},
+            "/Hub4/DoNotFeedInOvervoltage": {"initial": 1, "textformat": _n},
+            "/Hub4/FixSolarOffsetTo100mV": {"initial": 1, "textformat": _n},
+        }
+    )
+
+    paths_multiplus_dbus.update(
+        {
+            # com.victronenergy.settings/Settings/CGwacs/AcPowerSetPoint
+            # if positive then same value, if negative value +1
+            "/Hub4/L1/AcPowerSetpoint": {"initial": 0, "textformat": _n},
+            "/Hub4/L1/CurrentLimitedDueToHighTemp": {"initial": 0, "textformat": _n},
+            "/Hub4/L1/FrequencyVariationOccurred": {"initial": 0, "textformat": _n},
+            "/Hub4/L1/MaxFeedInPower": {"initial": 32766, "textformat": _n},
+            "/Hub4/L1/OffsetAddedToVoltageSetpoint": {"initial": 0, "textformat": _n},
+            "/Hub4/L1/OverruledShoreLimit": {"initial": None, "textformat": _n},
+        }
+    )
+
+    if phase_count >= 2:
+        paths_multiplus_dbus.update(
+            {
+                # com.victronenergy.settings/Settings/CGwacs/AcPowerSetPoint
+                # if positive then same value, if negative value +1
+                "/Hub4/L2/AcPowerSetpoint": {"initial": 0, "textformat": _n},
+                "/Hub4/L2/CurrentLimitedDueToHighTemp": {
+                    "initial": 0,
+                    "textformat": _n,
+                },
+                "/Hub4/L2/FrequencyVariationOccurred": {"initial": 0, "textformat": _n},
+                "/Hub4/L2/MaxFeedInPower": {"initial": 32766, "textformat": _n},
+                "/Hub4/L2/OffsetAddedToVoltageSetpoint": {
+                    "initial": 0,
+                    "textformat": _n,
+                },
+                "/Hub4/L2/OverruledShoreLimit": {"initial": None, "textformat": _n},
+            }
+        )
+
+    if phase_count == 3:
+        paths_multiplus_dbus.update(
+            {
+                # com.victronenergy.settings/Settings/CGwacs/AcPowerSetPoint
+                # if positive then same value, if negative value +1
+                "/Hub4/L3/AcPowerSetpoint": {"initial": 0, "textformat": _n},
+                "/Hub4/L3/CurrentLimitedDueToHighTemp": {
+                    "initial": 0,
+                    "textformat": _n,
+                },
+                "/Hub4/L3/FrequencyVariationOccurred": {"initial": 0, "textformat": _n},
+                "/Hub4/L3/MaxFeedInPower": {"initial": 32766, "textformat": _n},
+                "/Hub4/L3/OffsetAddedToVoltageSetpoint": {
+                    "initial": 0,
+                    "textformat": _n,
+                },
+                "/Hub4/L3/OverruledShoreLimit": {"initial": None, "textformat": _n},
+            }
+        )
+
+    paths_multiplus_dbus.update(
+        {
+            "/Hub4/Sustain": {"initial": 0, "textformat": _n},
+            "/Hub4/TargetPowerIsMaxFeedIn": {"initial": 0, "textformat": _n},
+            # ----
+            # "/Interfaces/Mk2/Connection": {"initial": "/dev/ttyS3", "textformat": _n},
+            # "/Interfaces/Mk2/ProductId": {"initial": 4464, "textformat": _n},
+            # "/Interfaces/Mk2/ProductName": {"initial": "MK3", "textformat": _n},
+            # "/Interfaces/Mk2/Status/Baudrate": {"initial": 115200, "textformat": _n},
+            # "/Interfaces/Mk2/Status/BusFreeMode": {"initial": 1, "textformat": _n},
+            # "/Interfaces/Mk2/Tunnel": {"initial": None, "textformat": _n},
+            # "/Interfaces/Mk2/Version": {"initial": 1170216, "textformat": _n},
+            # ----
+            "/Leds/Absorption": {"initial": 0, "textformat": _n},
+            "/Leds/Bulk": {"initial": 0, "textformat": _n},
+            "/Leds/Float": {"initial": 0, "textformat": _n},
+            "/Leds/Inverter": {"initial": 0, "textformat": _n},
+            "/Leds/LowBattery": {"initial": 0, "textformat": _n},
+            "/Leds/Mains": {"initial": 1, "textformat": _n},
+            "/Leds/Overload": {"initial": 0, "textformat": _n},
+            "/Leds/Temperature": {"initial": 0, "textformat": _n},
+            "/Mode": {"initial": 3, "textformat": _n},
+            "/ModeIsAdjustable": {"initial": 1, "textformat": _n},
+            "/PvInverter/Disable": {"initial": 1, "textformat": _n},
+            "/Quirks": {"initial": 0, "textformat": _n},
+            "/RedetectSystem": {"initial": 0, "textformat": _n},
+            "/Settings/Alarm/System/GridLost": {"initial": 1, "textformat": _n},
+            "/Settings/SystemSetup/AcInput1": {"initial": 1, "textformat": _n},
+            "/Settings/SystemSetup/AcInput2": {"initial": 0, "textformat": _n},
+            "/ShortIds": {"initial": 1, "textformat": _n},
+            "/Soc": {"initial": None, "textformat": _percent},
+            "/State": {"initial": 3, "textformat": _n},
+            "/SystemReset": {"initial": None, "textformat": _n},
+            "/VebusChargeState": {"initial": 1, "textformat": _n},
+            "/VebusError": {"initial": 0, "textformat": _n},
+            "/VebusMainState": {"initial": 9, "textformat": _n},
+            "/VebusSetChargeState": {"initial": 0, "textformat": _n},
+            # ----
+            "/UpdateIndex": {"initial": 0, "textformat": _n},
+        }
+    )
+
+    time_driver_started = int(time())
 
     DbusMultiPlusEmulator(
         servicename="com.victronenergy.vebus.ttyS3",
         deviceinstance=275,
-        paths=paths_dbus,
+        paths=paths_multiplus_dbus,
     )
 
     logging.info(
