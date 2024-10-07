@@ -1,0 +1,6 @@
+{
+    "[python]": { "editor.formatOnSave": true },
+    "python.analysis.extraPaths": [
+        "./dbus-multiplus-emulator/ext/velib_python"
+    ]
+}

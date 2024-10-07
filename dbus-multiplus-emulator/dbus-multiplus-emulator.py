@@ -65,15 +65,9 @@ data_watt_hours_save = 900
 # file to save watt hours on persistent storage
 data_watt_hours_storage_file = "/data/etc/dbus-multiplus-emulator/data_watt_hours.json"
 # file to save many writing operations (best on ramdisk to not wear SD card)
-data_watt_hours_working_file = (
-    "/var/volatile/tmp/dbus-multiplus-emulator_data_watt_hours.json"
-)
+data_watt_hours_working_file = "/var/volatile/tmp/dbus-multiplus-emulator_data_watt_hours.json"
 # get last modification timestamp
-timestamp_storage_file = (
-    os.path.getmtime(data_watt_hours_storage_file)
-    if os.path.isfile(data_watt_hours_storage_file)
-    else 0
-)
+timestamp_storage_file = os.path.getmtime(data_watt_hours_storage_file) if os.path.isfile(data_watt_hours_storage_file) else 0
 
 # load data to prevent sending 0 watthours for OutToInverter (charging)/InverterToOut (discharging) before the first loop
 # check if file in volatile storage exists
@@ -81,18 +75,14 @@ if os.path.isfile(data_watt_hours_working_file):
     with open(data_watt_hours_working_file, "r") as file:
         file = open(data_watt_hours_working_file, "r")
         json_data = json.load(file)
-        logging.info(
-            "Loaded JSON for OutToInverter (charging)/InverterToOut (discharging) once"
-        )
+        logging.info("Loaded JSON for OutToInverter (charging)/InverterToOut (discharging) once")
         logging.debug(json.dumps(json_data))
 # if not, check if file in persistent storage exists
 elif os.path.isfile(data_watt_hours_storage_file):
     with open(data_watt_hours_storage_file, "r") as file:
         file = open(data_watt_hours_storage_file, "r")
         json_data = json.load(file)
-        logging.info(
-            "Loaded JSON for OutToInverter (charging)/InverterToOut (discharging) once from persistent storage"
-        )
+        logging.info("Loaded JSON for OutToInverter (charging)/InverterToOut (discharging) once from persistent storage")
         logging.debug(json.dumps(json_data))
 else:
     json_data = {}
@@ -113,21 +103,21 @@ class DbusMultiPlusEmulator:
         logging.debug("%s /DeviceInstance = %d" % (servicename, deviceinstance))
 
         # Create the management objects, as specified in the ccgx dbus-api document
-        self._dbusservice.add_path("/Mgmt/ProcessName", __file__)  # ok
+        self._dbusservice.add_path("/Mgmt/ProcessName", __file__)
         self._dbusservice.add_path(
             "/Mgmt/ProcessVersion",
             "Unkown version, and running on Python " + platform.python_version(),
-        )  # ok
-        self._dbusservice.add_path("/Mgmt/Connection", connection)  # ok
+        )
+        self._dbusservice.add_path("/Mgmt/Connection", connection)
 
         # Create the mandatory objects
-        self._dbusservice.add_path("/DeviceInstance", deviceinstance)  # ok
-        self._dbusservice.add_path("/ProductId", 2623)  # ok
-        self._dbusservice.add_path("/ProductName", productname)  # ok
-        self._dbusservice.add_path("/CustomName", "")  # ok
-        self._dbusservice.add_path("/FirmwareVersion", 1296)  # ok
+        self._dbusservice.add_path("/DeviceInstance", deviceinstance)
+        self._dbusservice.add_path("/ProductId", 2623)
+        self._dbusservice.add_path("/ProductName", productname)
+        self._dbusservice.add_path("/CustomName", "")
+        self._dbusservice.add_path("/FirmwareVersion", 1296)
         self._dbusservice.add_path("/HardwareVersion", "0.1.0 (20240602)")
-        self._dbusservice.add_path("/Connected", 1)  # ok
+        self._dbusservice.add_path("/Connected", 1)
 
         # self._dbusservice.add_path('/Latency', None)
         # self._dbusservice.add_path('/ErrorCode', 0)
@@ -267,23 +257,13 @@ class DbusMultiPlusEmulator:
     def _create_dbus_monitor(self, *args, **kwargs):
         return DbusMonitor(*args, **kwargs)
 
-    def _dbus_value_changed(
-        self, dbusServiceName, dbusPath, dict, changes, deviceInstance
-    ):
+    def _dbus_value_changed(self, dbusServiceName, dbusPath, dict, changes, deviceInstance):
         self._changed = True
 
-        if (
-            dbusServiceNameBattery == ""
-            and dbusServiceName.startswith("com.victronenergy.battery")
-        ) or (
-            dbusServiceNameBattery != "" and dbusServiceName == dbusServiceNameBattery
-        ):
+        if (dbusServiceNameBattery == "" and dbusServiceName.startswith("com.victronenergy.battery")) or (dbusServiceNameBattery != "" and dbusServiceName == dbusServiceNameBattery):
             self.batteryValues.update({str(dbusPath): changes["Value"]})
 
-        if (
-            dbusServiceNameGrid == ""
-            and dbusServiceName.startswith("com.victronenergy.grid")
-        ) or (dbusServiceNameGrid != "" and dbusServiceName == dbusServiceNameGrid):
+        if (dbusServiceNameGrid == "" and dbusServiceName.startswith("com.victronenergy.grid")) or (dbusServiceNameGrid != "" and dbusServiceName == dbusServiceNameGrid):
             self.gridValues.update({str(dbusPath): changes["Value"]})
 
         # print('_dbus_value_changed')
@@ -338,19 +318,11 @@ class DbusMultiPlusEmulator:
         if data_watt_hours["time_creation"] + data_watt_hours_timespan > timestamp:
             data_watt_hours_dc = {
                 "charging": round(
-                    (
-                        data_watt_hours["dc"]["charging"] + dc_power_charging
-                        if "dc" in data_watt_hours
-                        else dc_power_charging
-                    ),
+                    (data_watt_hours["dc"]["charging"] + dc_power_charging if "dc" in data_watt_hours else dc_power_charging),
                     3,
                 ),
                 "discharging": round(
-                    (
-                        data_watt_hours["dc"]["discharging"] + dc_power_discharging
-                        if "dc" in data_watt_hours
-                        else dc_power_discharging
-                    ),
+                    (data_watt_hours["dc"]["discharging"] + dc_power_discharging if "dc" in data_watt_hours else dc_power_discharging),
                     3,
                 ),
             }
@@ -396,23 +368,11 @@ class DbusMultiPlusEmulator:
             factor = (timestamp - data_watt_hours["time_creation"]) / 3600
 
             dc_charging = round(
-                data_watt_hours_old["dc"]["charging"]
-                + (
-                    data_watt_hours["dc"]["charging"]
-                    / data_watt_hours["count"]
-                    * factor
-                )
-                / 1000,
+                data_watt_hours_old["dc"]["charging"] + (data_watt_hours["dc"]["charging"] / data_watt_hours["count"] * factor) / 1000,
                 3,
             )
             dc_discharging = round(
-                data_watt_hours_old["dc"]["discharging"]
-                + (
-                    data_watt_hours["dc"]["discharging"]
-                    / data_watt_hours["count"]
-                    * factor
-                )
-                / 1000,
+                data_watt_hours_old["dc"]["discharging"] + (data_watt_hours["dc"]["discharging"] / data_watt_hours["count"] * factor) / 1000,
                 3,
             )
 
@@ -433,9 +393,7 @@ class DbusMultiPlusEmulator:
                 with open(data_watt_hours_storage_file, "w") as file:
                     file.write(json.dumps(json_data))
                 timestamp_storage_file = timestamp
-                logging.info(
-                    "Written JSON for OutToInverter (charging)/InverterToOut (discharging) to persistent storage."
-                )
+                logging.info("Written JSON for OutToInverter (charging)/InverterToOut (discharging) to persistent storage.")
 
             # begin a new cycle
             data_watt_hours_dc = {
@@ -459,77 +417,37 @@ class DbusMultiPlusEmulator:
         self._dbusservice["/Ac/ActiveIn/L1/F"] = (
             self.gridValues["/Ac/L1/Frequency"]
             if self.gridValues["/Ac/L1/Frequency"] is not None and "L1" in phase_used
-            else (
-                grid_frequency
-                if self.gridValues["/Ac/L1/Frequency"] is None and "L1" in phase_used
-                else None
-            )
+            else (grid_frequency if self.gridValues["/Ac/L1/Frequency"] is None and "L1" in phase_used else None)
         )
-        self._dbusservice["/Ac/ActiveIn/L1/I"] = (
-            self.gridValues["/Ac/L1/Current"] if "L1" in phase_used else None
-        )
-        self._dbusservice["/Ac/ActiveIn/L1/P"] = (
-            self.gridValues["/Ac/L1/Power"] if "L1" in phase_used else None
-        )
-        self._dbusservice["/Ac/ActiveIn/L1/S"] = (
-            self.gridValues["/Ac/L1/Power"] if "L1" in phase_used else None
-        )
-        self._dbusservice["/Ac/ActiveIn/L1/V"] = (
-            self.gridValues["/Ac/L1/Voltage"] if "L1" in phase_used else None
-        )
+        self._dbusservice["/Ac/ActiveIn/L1/I"] = self.gridValues["/Ac/L1/Current"] if "L1" in phase_used else None
+        self._dbusservice["/Ac/ActiveIn/L1/P"] = self.gridValues["/Ac/L1/Power"] if "L1" in phase_used else None
+        self._dbusservice["/Ac/ActiveIn/L1/S"] = self.gridValues["/Ac/L1/Power"] if "L1" in phase_used else None
+        self._dbusservice["/Ac/ActiveIn/L1/V"] = self.gridValues["/Ac/L1/Voltage"] if "L1" in phase_used else None
 
         # L2 ----
         self._dbusservice["/Ac/ActiveIn/L2/F"] = (
             self.gridValues["/Ac/L2/Frequency"]
             if self.gridValues["/Ac/L2/Frequency"] is not None and "L2" in phase_used
-            else (
-                grid_frequency
-                if self.gridValues["/Ac/L2/Frequency"] is None and "L2" in phase_used
-                else None
-            )
+            else (grid_frequency if self.gridValues["/Ac/L2/Frequency"] is None and "L2" in phase_used else None)
         )
-        self._dbusservice["/Ac/ActiveIn/L2/I"] = (
-            self.gridValues["/Ac/L2/Current"] if "L2" in phase_used else None
-        )
-        self._dbusservice["/Ac/ActiveIn/L2/P"] = (
-            self.gridValues["/Ac/L2/Power"] if "L2" in phase_used else None
-        )
-        self._dbusservice["/Ac/ActiveIn/L2/S"] = (
-            self.gridValues["/Ac/L2/Power"] if "L2" in phase_used else None
-        )
-        self._dbusservice["/Ac/ActiveIn/L2/V"] = (
-            self.gridValues["/Ac/L2/Voltage"] if "L2" in phase_used else None
-        )
+        self._dbusservice["/Ac/ActiveIn/L2/I"] = self.gridValues["/Ac/L2/Current"] if "L2" in phase_used else None
+        self._dbusservice["/Ac/ActiveIn/L2/P"] = self.gridValues["/Ac/L2/Power"] if "L2" in phase_used else None
+        self._dbusservice["/Ac/ActiveIn/L2/S"] = self.gridValues["/Ac/L2/Power"] if "L2" in phase_used else None
+        self._dbusservice["/Ac/ActiveIn/L2/V"] = self.gridValues["/Ac/L2/Voltage"] if "L2" in phase_used else None
 
         # L3 ----
         self._dbusservice["/Ac/ActiveIn/L3/F"] = (
             self.gridValues["/Ac/L3/Frequency"]
             if self.gridValues["/Ac/L3/Frequency"] is not None and "L3" in phase_used
-            else (
-                grid_frequency
-                if self.gridValues["/Ac/L3/Frequency"] is None and "L3" in phase_used
-                else None
-            )
+            else (grid_frequency if self.gridValues["/Ac/L3/Frequency"] is None and "L3" in phase_used else None)
         )
-        self._dbusservice["/Ac/ActiveIn/L3/I"] = (
-            self.gridValues["/Ac/L3/Current"] if "L3" in phase_used else None
-        )
-        self._dbusservice["/Ac/ActiveIn/L3/P"] = (
-            self.gridValues["/Ac/L3/Power"] if "L3" in phase_used else None
-        )
-        self._dbusservice["/Ac/ActiveIn/L3/S"] = (
-            self.gridValues["/Ac/L3/Power"] if "L3" in phase_used else None
-        )
-        self._dbusservice["/Ac/ActiveIn/L3/V"] = (
-            self.gridValues["/Ac/L3/Voltage"] if "L3" in phase_used else None
-        )
+        self._dbusservice["/Ac/ActiveIn/L3/I"] = self.gridValues["/Ac/L3/Current"] if "L3" in phase_used else None
+        self._dbusservice["/Ac/ActiveIn/L3/P"] = self.gridValues["/Ac/L3/Power"] if "L3" in phase_used else None
+        self._dbusservice["/Ac/ActiveIn/L3/S"] = self.gridValues["/Ac/L3/Power"] if "L3" in phase_used else None
+        self._dbusservice["/Ac/ActiveIn/L3/V"] = self.gridValues["/Ac/L3/Voltage"] if "L3" in phase_used else None
 
         # calculate total values
-        self._dbusservice["/Ac/ActiveIn/P"] = (
-            self.zeroIfNone(self.gridValues["/Ac/L1/Power"])
-            + self.zeroIfNone(self.gridValues["/Ac/L2/Power"])
-            + self.zeroIfNone(self.gridValues["/Ac/L3/Power"])
-        )
+        self._dbusservice["/Ac/ActiveIn/P"] = self.zeroIfNone(self.gridValues["/Ac/L1/Power"]) + self.zeroIfNone(self.gridValues["/Ac/L2/Power"]) + self.zeroIfNone(self.gridValues["/Ac/L3/Power"])
         self._dbusservice["/Ac/ActiveIn/S"] = self._dbusservice["/Ac/ActiveIn/P"]
 
         # get values from BMS
@@ -537,43 +455,25 @@ class DbusMultiPlusEmulator:
         self._dbusservice["/Ac/NumberOfPhases"] = phase_count
 
         # L1 ----
-        self._dbusservice["/Ac/Out/L1/F"] = (
-            self._dbusservice["/Ac/ActiveIn/L1/F"] if "L1" in phase_used else None
-        )
+        self._dbusservice["/Ac/Out/L1/F"] = self._dbusservice["/Ac/ActiveIn/L1/F"] if "L1" in phase_used else None
         self._dbusservice["/Ac/Out/L1/P"] = (
             round(
-                (
-                    self.zeroIfNone(self._dbusservice["/Ac/ActiveIn/L1/P"])
-                    + (
-                        self.zeroIfNone(self.batteryValues["/Dc/0/Power"]) / phase_count
-                        if self.zeroIfNone(self.batteryValues["/Dc/0/Power"]) != 0
-                        else 0
-                    )
-                )
-                * -1,
+                (self.zeroIfNone(self._dbusservice["/Ac/ActiveIn/L1/P"]) + (self.zeroIfNone(self.batteryValues["/Dc/0/Power"]) / phase_count if self.zeroIfNone(self.batteryValues["/Dc/0/Power"]) != 0 else 0)) * -1,
                 0,
             )
             if "L1" in phase_used
             else None
         )
-        self._dbusservice["/Ac/Out/L1/S"] = (
-            self._dbusservice["/Ac/Out/L1/P"] if "L1" in phase_used else None
-        )
-        self._dbusservice["/Ac/Out/L1/NominalInverterPower"] = (
-            inverter_max_power if "L1" in phase_used else None
-        )
-        self._dbusservice["/Ac/Out/L1/V"] = (
-            self._dbusservice["/Ac/ActiveIn/L1/V"] if "L1" in phase_used else None
-        )
+        self._dbusservice["/Ac/Out/L1/S"] = self._dbusservice["/Ac/Out/L1/P"] if "L1" in phase_used else None
+        self._dbusservice["/Ac/Out/L1/NominalInverterPower"] = inverter_max_power if "L1" in phase_used else None
+        self._dbusservice["/Ac/Out/L1/V"] = self._dbusservice["/Ac/ActiveIn/L1/V"] if "L1" in phase_used else None
         self._dbusservice["/Ac/Out/L1/I"] = (
             (
                 round(
-                    self._dbusservice["/Ac/Out/L1/P"]
-                    / self._dbusservice["/Ac/Out/L1/V"],
+                    self._dbusservice["/Ac/Out/L1/P"] / self._dbusservice["/Ac/Out/L1/V"],
                     2,
                 )
-                if self._dbusservice["/Ac/Out/L1/V"] is not None
-                and self._dbusservice["/Ac/Out/L1/V"] != 0
+                if self._dbusservice["/Ac/Out/L1/V"] is not None and self._dbusservice["/Ac/Out/L1/V"] != 0
                 else 0
             )
             if "L1" in phase_used
@@ -581,43 +481,25 @@ class DbusMultiPlusEmulator:
         )
 
         # L2 ----
-        self._dbusservice["/Ac/Out/L2/F"] = (
-            self._dbusservice["/Ac/ActiveIn/L2/F"] if "L2" in phase_used else None
-        )
+        self._dbusservice["/Ac/Out/L2/F"] = self._dbusservice["/Ac/ActiveIn/L2/F"] if "L2" in phase_used else None
         self._dbusservice["/Ac/Out/L2/P"] = (
             round(
-                (
-                    self.zeroIfNone(self._dbusservice["/Ac/ActiveIn/L2/P"])
-                    + (
-                        self.zeroIfNone(self.batteryValues["/Dc/0/Power"]) / phase_count
-                        if self.zeroIfNone(self.batteryValues["/Dc/0/Power"]) != 0
-                        else 0
-                    )
-                )
-                * -1,
+                (self.zeroIfNone(self._dbusservice["/Ac/ActiveIn/L2/P"]) + (self.zeroIfNone(self.batteryValues["/Dc/0/Power"]) / phase_count if self.zeroIfNone(self.batteryValues["/Dc/0/Power"]) != 0 else 0)) * -1,
                 0,
             )
             if "L2" in phase_used
             else None
         )
-        self._dbusservice["/Ac/Out/L2/S"] = (
-            self._dbusservice["/Ac/Out/L2/P"] if "L2" in phase_used else None
-        )
-        self._dbusservice["/Ac/Out/L2/NominalInverterPower"] = (
-            inverter_max_power if "L2" in phase_used else None
-        )
-        self._dbusservice["/Ac/Out/L2/V"] = (
-            self._dbusservice["/Ac/ActiveIn/L2/V"] if "L2" in phase_used else None
-        )
+        self._dbusservice["/Ac/Out/L2/S"] = self._dbusservice["/Ac/Out/L2/P"] if "L2" in phase_used else None
+        self._dbusservice["/Ac/Out/L2/NominalInverterPower"] = inverter_max_power if "L2" in phase_used else None
+        self._dbusservice["/Ac/Out/L2/V"] = self._dbusservice["/Ac/ActiveIn/L2/V"] if "L2" in phase_used else None
         self._dbusservice["/Ac/Out/L2/I"] = (
             (
                 round(
-                    self._dbusservice["/Ac/Out/L2/P"]
-                    / self._dbusservice["/Ac/Out/L2/V"],
+                    self._dbusservice["/Ac/Out/L2/P"] / self._dbusservice["/Ac/Out/L2/V"],
                     2,
                 )
-                if self._dbusservice["/Ac/Out/L2/V"] is not None
-                and self._dbusservice["/Ac/Out/L2/V"] != 0
+                if self._dbusservice["/Ac/Out/L2/V"] is not None and self._dbusservice["/Ac/Out/L2/V"] != 0
                 else 0
             )
             if "L2" in phase_used
@@ -625,43 +507,25 @@ class DbusMultiPlusEmulator:
         )
 
         # L3 ----
-        self._dbusservice["/Ac/Out/L3/F"] = (
-            self._dbusservice["/Ac/ActiveIn/L3/F"] if "L3" in phase_used else None
-        )
+        self._dbusservice["/Ac/Out/L3/F"] = self._dbusservice["/Ac/ActiveIn/L3/F"] if "L3" in phase_used else None
         self._dbusservice["/Ac/Out/L3/P"] = (
             round(
-                (
-                    self.zeroIfNone(self._dbusservice["/Ac/ActiveIn/L3/P"])
-                    + (
-                        self.zeroIfNone(self.batteryValues["/Dc/0/Power"]) / phase_count
-                        if self.zeroIfNone(self.batteryValues["/Dc/0/Power"]) != 0
-                        else 0
-                    )
-                )
-                * -1,
+                (self.zeroIfNone(self._dbusservice["/Ac/ActiveIn/L3/P"]) + (self.zeroIfNone(self.batteryValues["/Dc/0/Power"]) / phase_count if self.zeroIfNone(self.batteryValues["/Dc/0/Power"]) != 0 else 0)) * -1,
                 0,
             )
             if "L3" in phase_used
             else None
         )
-        self._dbusservice["/Ac/Out/L3/S"] = (
-            self._dbusservice["/Ac/Out/L3/P"] if "L3" in phase_used else None
-        )
-        self._dbusservice["/Ac/Out/L3/NominalInverterPower"] = (
-            inverter_max_power if "L3" in phase_used else None
-        )
-        self._dbusservice["/Ac/Out/L3/V"] = (
-            self._dbusservice["/Ac/ActiveIn/L3/V"] if "L3" in phase_used else None
-        )
+        self._dbusservice["/Ac/Out/L3/S"] = self._dbusservice["/Ac/Out/L3/P"] if "L3" in phase_used else None
+        self._dbusservice["/Ac/Out/L3/NominalInverterPower"] = inverter_max_power if "L3" in phase_used else None
+        self._dbusservice["/Ac/Out/L3/V"] = self._dbusservice["/Ac/ActiveIn/L3/V"] if "L3" in phase_used else None
         self._dbusservice["/Ac/Out/L3/I"] = (
             (
                 round(
-                    self._dbusservice["/Ac/Out/L3/P"]
-                    / self._dbusservice["/Ac/Out/L3/V"],
+                    self._dbusservice["/Ac/Out/L3/P"] / self._dbusservice["/Ac/Out/L3/V"],
                     2,
                 )
-                if self._dbusservice["/Ac/Out/L3/V"] is not None
-                and self._dbusservice["/Ac/Out/L3/V"] != 0
+                if self._dbusservice["/Ac/Out/L3/V"] is not None and self._dbusservice["/Ac/Out/L3/V"] != 0
                 else 0
             )
             if "L3" in phase_used
@@ -674,39 +538,19 @@ class DbusMultiPlusEmulator:
             + self.zeroIfNone(self._dbusservice["/Ac/Out/L2/NominalInverterPower"])
             + self.zeroIfNone(self._dbusservice["/Ac/Out/L3/NominalInverterPower"])
         )
-        self._dbusservice["/Ac/Out/P"] = (
-            self.zeroIfNone(self._dbusservice["/Ac/Out/L1/P"])
-            + self.zeroIfNone(self._dbusservice["/Ac/Out/L2/P"])
-            + self.zeroIfNone(self._dbusservice["/Ac/Out/L3/P"])
-        )
-        self._dbusservice["/Ac/Out/S"] = (
-            self.zeroIfNone(self._dbusservice["/Ac/Out/L1/S"])
-            + self.zeroIfNone(self._dbusservice["/Ac/Out/L2/S"])
-            + self.zeroIfNone(self._dbusservice["/Ac/Out/L3/S"])
-        )
+        self._dbusservice["/Ac/Out/P"] = self.zeroIfNone(self._dbusservice["/Ac/Out/L1/P"]) + self.zeroIfNone(self._dbusservice["/Ac/Out/L2/P"]) + self.zeroIfNone(self._dbusservice["/Ac/Out/L3/P"])
+        self._dbusservice["/Ac/Out/S"] = self.zeroIfNone(self._dbusservice["/Ac/Out/L1/S"]) + self.zeroIfNone(self._dbusservice["/Ac/Out/L2/S"]) + self.zeroIfNone(self._dbusservice["/Ac/Out/L3/S"])
 
-        self._dbusservice["/BatteryOperationalLimits/BatteryLowVoltage"] = (
-            self.batteryValues["/Info/BatteryLowVoltage"]
-        )
-        self._dbusservice["/BatteryOperationalLimits/MaxChargeCurrent"] = (
-            self.batteryValues["/Info/MaxChargeCurrent"]
-        )
-        self._dbusservice["/BatteryOperationalLimits/MaxChargeVoltage"] = (
-            self.batteryValues["/Info/MaxChargeVoltage"]
-        )
-        self._dbusservice["/BatteryOperationalLimits/MaxDischargeCurrent"] = (
-            self.batteryValues["/Info/MaxDischargeCurrent"]
-        )
-        self._dbusservice["/BatterySense/Temperature"] = self.batteryValues[
-            "/Dc/0/Temperature"
-        ]
+        self._dbusservice["/BatteryOperationalLimits/BatteryLowVoltage"] = self.batteryValues["/Info/BatteryLowVoltage"]
+        self._dbusservice["/BatteryOperationalLimits/MaxChargeCurrent"] = self.batteryValues["/Info/MaxChargeCurrent"]
+        self._dbusservice["/BatteryOperationalLimits/MaxChargeVoltage"] = self.batteryValues["/Info/MaxChargeVoltage"]
+        self._dbusservice["/BatteryOperationalLimits/MaxDischargeCurrent"] = self.batteryValues["/Info/MaxDischargeCurrent"]
+        self._dbusservice["/BatterySense/Temperature"] = self.batteryValues["/Dc/0/Temperature"]
 
         # get values from BMS
         # for bubble flow in GUI
         self._dbusservice["/Dc/0/Current"] = self.batteryValues["/Dc/0/Current"]
-        self._dbusservice["/Dc/0/MaxChargeCurrent"] = self.batteryValues[
-            "/Info/MaxChargeCurrent"
-        ]
+        self._dbusservice["/Dc/0/MaxChargeCurrent"] = self.batteryValues["/Info/MaxChargeCurrent"]
         self._dbusservice["/Dc/0/Power"] = self.batteryValues["/Dc/0/Power"]
         self._dbusservice["/Dc/0/Temperature"] = self.batteryValues["/Dc/0/Temperature"]
         self._dbusservice["/Dc/0/Voltage"] = (
@@ -714,12 +558,10 @@ class DbusMultiPlusEmulator:
             if self.batteryValues["/Dc/0/Voltage"] is not None
             else (
                 round(
-                    self.batteryValues["/Dc/0/Power"]
-                    / self.batteryValues["/Dc/0/Current"],
+                    self.batteryValues["/Dc/0/Power"] / self.batteryValues["/Dc/0/Current"],
                     2,
                 )
-                if self.batteryValues["/Dc/0/Power"] is not None
-                and self.batteryValues["/Dc/0/Current"] is not None
+                if self.batteryValues["/Dc/0/Power"] is not None and self.batteryValues["/Dc/0/Current"] is not None
                 else None
             )
         )
@@ -732,30 +574,14 @@ class DbusMultiPlusEmulator:
         if phase_count == 3:
             self._dbusservice["/Devices/2/UpTime"] = int(time()) - time_driver_started
 
-        self._dbusservice["/Energy/InverterToAcOut"] = (
-            json_data["dc"]["discharging"]
-            if "dc" in json_data and "discharging" in json_data["dc"]
-            else 0
-        )
-        self._dbusservice["/Energy/OutToInverter"] = (
-            json_data["dc"]["charging"]
-            if "dc" in json_data and "charging" in json_data["dc"]
-            else 0
-        )
+        self._dbusservice["/Energy/InverterToAcOut"] = json_data["dc"]["discharging"] if "dc" in json_data and "discharging" in json_data["dc"] else 0
+        self._dbusservice["/Energy/OutToInverter"] = json_data["dc"]["charging"] if "dc" in json_data and "charging" in json_data["dc"] else 0
 
-        self._dbusservice["/Hub/ChargeVoltage"] = self.batteryValues[
-            "/Info/MaxChargeVoltage"
-        ]
+        self._dbusservice["/Hub/ChargeVoltage"] = self.batteryValues["/Info/MaxChargeVoltage"]
 
-        self._dbusservice["/Leds/Absorption"] = (
-            1 if self.batteryValues["/Info/ChargeMode"].startswith("Absorption") else 0
-        )
-        self._dbusservice["/Leds/Bulk"] = (
-            1 if self.batteryValues["/Info/ChargeMode"].startswith("Bulk") else 0
-        )
-        self._dbusservice["/Leds/Float"] = (
-            1 if self.batteryValues["/Info/ChargeMode"].startswith("Float") else 0
-        )
+        self._dbusservice["/Leds/Absorption"] = 1 if self.batteryValues["/Info/ChargeMode"].startswith("Absorption") else 0
+        self._dbusservice["/Leds/Bulk"] = 1 if self.batteryValues["/Info/ChargeMode"].startswith("Bulk") else 0
+        self._dbusservice["/Leds/Float"] = 1 if self.batteryValues["/Info/ChargeMode"].startswith("Float") else 0
         self._dbusservice["/Soc"] = self.batteryValues["/Soc"]
 
         # increment UpdateIndex - to show that new data is available
@@ -1504,9 +1330,7 @@ def main():
         paths=paths_multiplus_dbus,
     )
 
-    logging.info(
-        "Connected to dbus and switching over to GLib.MainLoop() (= event based)"
-    )
+    logging.info("Connected to dbus and switching over to GLib.MainLoop() (= event based)")
     mainloop = GLib.MainLoop()
     mainloop.run()
 

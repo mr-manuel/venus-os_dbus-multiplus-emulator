@@ -29,7 +29,7 @@ from collections import defaultdict
 from functools import partial
 
 # our own packages
-from ve_utils import exit_on_error, wrap_dbus_value, unwrap_dbus_value
+from ve_utils import exit_on_error, wrap_dbus_value, unwrap_dbus_value, add_name_owner_changed_receiver
 notfound = object() # For lookups where None is a valid result
 
 logger = logging.getLogger(__name__)
@@ -82,7 +82,7 @@ class Service(object):
 class DbusMonitor(object):
 	## Constructor
 	def __init__(self, dbusTree, valueChangedCallback=None, deviceAddedCallback=None,
-					deviceRemovedCallback=None, namespace="com.victronenergy"):
+					deviceRemovedCallback=None, namespace="com.victronenergy", ignoreServices=[]):
 		# valueChangedCallback is the callback that we call when something has changed.
 		# def value_changed_on_dbus(dbusServiceName, dbusPath, options, changes, deviceInstance):
 		# in which changes is a tuple with GetText() and GetValue()
@@ -90,6 +90,7 @@ class DbusMonitor(object):
 		self.deviceAddedCallback = deviceAddedCallback
 		self.deviceRemovedCallback = deviceRemovedCallback
 		self.dbusTree = dbusTree
+		self.ignoreServices = ignoreServices
 
 		# Lists all tracked services. Stores name, id, device instance, value per path, and whenToLog info
 		# indexed by service name (eg. com.victronenergy.settings).
@@ -113,7 +114,7 @@ class DbusMonitor(object):
 		standardBus = (dbus.SessionBus() if 'DBUS_SESSION_BUS_ADDRESS' in os.environ \
 			else dbus.SystemBus())
 
-		self.add_name_owner_changed_receiver(standardBus, self.dbus_name_owner_changed)
+		add_name_owner_changed_receiver(standardBus, self.dbus_name_owner_changed)
 
 		# Subscribe to PropertiesChanged for all services
 		self.dbusConn.add_signal_receiver(self.handler_value_changes,
@@ -149,21 +150,6 @@ class DbusMonitor(object):
 
 		#decouple, and process in main loop
 		GLib.idle_add(exit_on_error, self._process_name_owner_changed, name, oldowner, newowner)
-
-	@staticmethod
-	# When supported, only name owner changes for the the given namespace are reported. This
-	# prevents spending cpu time at irrelevant changes, like scripts accessing the bus temporarily.
-	def add_name_owner_changed_receiver(dbus, name_owner_changed, namespace="com.victronenergy"):
-		# support for arg0namespace is submitted upstream, but not included at the time of
-		# writing, Venus OS does support it, so try if it works.
-		if namespace is None:
-			dbus.add_signal_receiver(name_owner_changed, signal_name='NameOwnerChanged')
-		else:
-			try:
-				dbus.add_signal_receiver(name_owner_changed,
-					signal_name='NameOwnerChanged', arg0namespace=namespace)
-			except TypeError:
-				dbus.add_signal_receiver(name_owner_changed, signal_name='NameOwnerChanged')
 
 	def _process_name_owner_changed(self, name, oldowner, newowner):
 		if newowner != '':
@@ -205,6 +191,10 @@ class DbusMonitor(object):
 		# make it a normal string instead of dbus string
 		serviceName = str(serviceName)
 
+		if (len(self.ignoreServices) != 0 and any(serviceName.startswith(x) for x in self.ignoreServices)):
+			logger.debug("Ignoring service %s" % serviceName)
+			return False
+
 		paths = self.dbusTree.get('.'.join(serviceName.split('.')[0:3]), None)
 		if paths is None:
 			logger.debug("Ignoring service %s, not in the tree" % serviceName)
@@ -217,6 +207,15 @@ class DbusMonitor(object):
 		# raises, check process_name_owner_changed, and D-Bus workings.
 		assert serviceName not in self.servicesByName
 		assert serviceId not in self.servicesById
+
+		# Try to fetch everything with a GetItems, then fall back to older
+		# methods if that fails
+		try:
+			values = self.dbusConn.call_blocking(serviceName, '/', None, 'GetItems', '', [])
+		except dbus.exceptions.DBusException:
+			logger.info("GetItems failed, trying legacy methods")
+		else:
+			return self.scan_dbus_service_getitems_done(serviceName, serviceId, values)
 
 		if serviceName == 'com.victronenergy.settings':
 			di = 0
@@ -282,6 +281,40 @@ class DbusMonitor(object):
 		self.servicesById[serviceId] = service
 		self.servicesByClass[service.service_class].append(service)
 
+		return True
+
+	def scan_dbus_service_getitems_done(self, serviceName, serviceId, values):
+		# Keeping these exceptions for legacy reasons
+		if serviceName == 'com.victronenergy.settings':
+			di = 0
+		elif serviceName.startswith('com.victronenergy.vecan.'):
+			di = 0
+		else:
+			try:
+				di = values['/DeviceInstance']['Value']
+			except KeyError:
+				logger.info("       %s was skipped because it has no device instance" % serviceName)
+				return False
+			else:
+				di = int(di)
+
+		logger.info("       %s has device instance %s" % (serviceName, di))
+		service = self.make_service(serviceId, serviceName, di)
+
+		paths = self.dbusTree.get('.'.join(serviceName.split('.')[0:3]), {})
+		for path, options in paths.items():
+			item = values.get(path, notfound)
+			if item is notfound:
+				service.paths[path] = self.make_monitor(service, path, None, None, options)
+			else:
+				service.set_seen(path)
+				value = item.get('Value', None)
+				text = item.get('Text', None)
+				service.paths[path] = self.make_monitor(service, path, unwrap_dbus_value(value), unwrap_dbus_value(text), options)
+
+		self.servicesByName[serviceName] = service
+		self.servicesById[serviceId] = service
+		self.servicesByClass[service.service_class].append(service)
 		return True
 
 	def handler_item_changes(self, items, senderId):
