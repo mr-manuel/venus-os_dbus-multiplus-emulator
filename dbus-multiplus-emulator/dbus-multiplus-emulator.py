@@ -37,9 +37,9 @@ grid_nominal_voltage = 230.0
 # UK/USA
 # grid_nominal_voltage = 120.0
 
-# enter the dbusServiceName from which the grid meter data should be fetched, if there is more than one
+# enter the dbus service name from which the grid meter data should be fetched, if there is more than one
 # e.g. com.victronenergy.grid.mqtt_grid_31
-dbusServiceNameGrid = ""
+dbus_service_name_grid = ""
 
 # enter the maximum power of the inverter of a single phase
 inverter_max_power = 4500
@@ -49,6 +49,12 @@ inverter_max_power = 4500
 phase_used = ["L1"]
 # phase_used = ["L1", "L2"]
 # phase_used = ["L1", "L2", "L3"]
+
+# if there is more then one phase, the emulator can only divide the DC power equally to all AC phases
+# since in reality this is rarely the case, it's possible to set an ac load meter which provides the power of each inverter per phase
+# enter the dbus service name from which the ac load meter data should be fetched, if there is more than one
+# e.g. com.victronenergy.acload.mqtt_acload_31
+dbus_service_name_ac_load = ""
 
 # ------------------ USER CHANGABLE VALUES | END --------------------
 
@@ -115,7 +121,7 @@ class DbusMultiPlusEmulator:
         self._dbusservice.add_path("/ProductName", productname)
         self._dbusservice.add_path("/CustomName", "")
         self._dbusservice.add_path("/FirmwareVersion", 1296)
-        self._dbusservice.add_path("/HardwareVersion", "0.1.0 (20240602)")
+        self._dbusservice.add_path("/HardwareVersion", "1.0.0 (20241016)")
         self._dbusservice.add_path("/Connected", 1)
 
         # self._dbusservice.add_path('/Latency', None)
@@ -135,8 +141,9 @@ class DbusMultiPlusEmulator:
             )
 
         # create empty dictionaries for later use
-        self.battery_items = {}
+        self.system_items = {}
         self.grid_items = {}
+        self.ac_load_items = {}
 
         logging.info("Starting the main loop")
 
@@ -154,9 +161,9 @@ class DbusMultiPlusEmulator:
         # ##################################################################################################################
 
         # get DC values
-        dc_power = self.zeroIfNone(self.battery_items["/Dc/Battery/Power"].get_value())
-        dc_voltage = self.zeroIfNone(self.battery_items["/Dc/Battery/Voltage"].get_value())
-        dc_current = self.zeroIfNone(self.battery_items["/Dc/Battery/Current"].get_value())
+        dc_power = self.zeroIfNone(self.system_items["/Dc/Battery/Power"].get_value())
+        dc_voltage = self.zeroIfNone(self.system_items["/Dc/Battery/Voltage"].get_value())
+        dc_current = self.zeroIfNone(self.system_items["/Dc/Battery/Current"].get_value())
 
         # # # calculate watthours
         # measure power and calculate watthours, since it provides only watthours for production/import/consumption and no export
@@ -265,99 +272,162 @@ class DbusMultiPlusEmulator:
             logging.info("--> data_watt_hours(): %s" % json.dumps(data_watt_hours))
 
         # update values in dbus
-
-        # get values from BMS
         # for bubble flow in chart and load visualization
-        # TODO: CHECK IF SINGLE VALUES ARE NOT NONE
-        # L1 ----
-        self._dbusservice["/Ac/ActiveIn/L1/F"] = (
-            self.grid_items["/Ac/L1/Frequency"].get_value()
-            if self.grid_items["/Ac/L1/Frequency"] is not None and "L1" in phase_used
-            else (grid_frequency if self.grid_items["/Ac/L1/Frequency"] is None and "L1" in phase_used else None)
-        )
-        # since the MultiPlus emulator is only integrating the power flowing from AC to DC and vice versa, the power is divided by the number of phases
-        self._dbusservice["/Ac/ActiveIn/L1/P"] = (
-            round(
-                (dc_power / phase_count if dc_power != 0 else 0),
-                0,
-            )
-            if "L1" in phase_used
-            else None
-        )
-        self._dbusservice["/Ac/ActiveIn/L1/S"] = self._dbusservice["/Ac/ActiveIn/L1/P"] if "L1" in phase_used else None
-        self._dbusservice["/Ac/ActiveIn/L1/V"] = self.grid_items["/Ac/L1/Voltage"].get_value() if "L1" in phase_used else None
-        self._dbusservice["/Ac/ActiveIn/L1/I"] = (
-            (
-                round(
-                    self._dbusservice["/Ac/ActiveIn/L1/P"] / self._dbusservice["/Ac/ActiveIn/L1/V"],
-                    2,
-                )
-                if self._dbusservice["/Ac/ActiveIn/L1/V"] is not None and self._dbusservice["/Ac/ActiveIn/L1/V"] != 0
-                else 0
-            )
-            if "L1" in phase_used
-            else None
-        )
 
-        # L2 ----
-        self._dbusservice["/Ac/ActiveIn/L2/F"] = (
-            self.grid_items["/Ac/L2/Frequency"].get_value()
-            if self.grid_items["/Ac/L2/Frequency"] is not None and "L2" in phase_used
-            else (grid_frequency if self.grid_items["/Ac/L2/Frequency"] is None and "L2" in phase_used else None)
-        )
-        # since the MultiPlus emulator is only integrating the power flowing from AC to DC and vice versa, the power is divided by the number of phases
-        self._dbusservice["/Ac/ActiveIn/L2/P"] = (
-            round(
-                (dc_power / phase_count if dc_power != 0 else 0),
-                0,
-            )
-            if "L2" in phase_used
-            else None
-        )
-        self._dbusservice["/Ac/ActiveIn/L2/S"] = self._dbusservice["/Ac/ActiveIn/L2/P"] if "L2" in phase_used else None
-        self._dbusservice["/Ac/ActiveIn/L2/V"] = self.grid_items["/Ac/L2/Voltage"].get_value() if "L2" in phase_used else None
-        self._dbusservice["/Ac/ActiveIn/L2/I"] = (
-            (
-                round(
-                    self._dbusservice["/Ac/ActiveIn/L2/P"] / self._dbusservice["/Ac/ActiveIn/L2/V"],
-                    2,
-                )
-                if self._dbusservice["/Ac/ActiveIn/L2/V"] is not None and self._dbusservice["/Ac/ActiveIn/L2/V"] != 0
-                else 0
-            )
-            if "L2" in phase_used
-            else None
-        )
+        if self.ac_load_items != {}:
+            # L1 ----
+            if "L1" in phase_used and self.ac_load_items["/Ac/L1/Power"] is not None:
+                # power
+                self._dbusservice["/Ac/ActiveIn/L1/P"] = self.ac_load_items["/Ac/L1/Power"].get_value()
+                self._dbusservice["/Ac/ActiveIn/L1/S"] = self._dbusservice["/Ac/ActiveIn/L1/P"]
 
-        # L3 ----
-        self._dbusservice["/Ac/ActiveIn/L3/F"] = (
-            self.grid_items["/Ac/L3/Frequency"].get_value()
-            if self.grid_items["/Ac/L3/Frequency"] is not None and "L3" in phase_used
-            else (grid_frequency if self.grid_items["/Ac/L3/Frequency"] is None and "L3" in phase_used else None)
-        )
-        # since the MultiPlus emulator is only integrating the power flowing from AC to DC and vice versa, the power is divided by the number of phases
-        self._dbusservice["/Ac/ActiveIn/L3/P"] = (
-            round(
-                (dc_power / phase_count if dc_power != 0 else 0),
-                0,
-            )
-            if "L3" in phase_used
-            else None
-        )
-        self._dbusservice["/Ac/ActiveIn/L3/S"] = self._dbusservice["/Ac/ActiveIn/L3/P"] if "L3" in phase_used else None
-        self._dbusservice["/Ac/ActiveIn/L3/V"] = self.grid_items["/Ac/L3/Voltage"].get_value() if "L3" in phase_used else None
-        self._dbusservice["/Ac/ActiveIn/L3/I"] = (
-            (
-                round(
-                    self._dbusservice["/Ac/ActiveIn/L3/P"] / self._dbusservice["/Ac/ActiveIn/L3/V"],
-                    2,
-                )
-                if self._dbusservice["/Ac/ActiveIn/L3/V"] is not None and self._dbusservice["/Ac/ActiveIn/L3/V"] != 0
-                else 0
-            )
-            if "L3" in phase_used
-            else None
-        )
+                # frequency
+                if self.ac_load_items["/Ac/L1/Frequency"] is not None:
+                    self._dbusservice["/Ac/ActiveIn/L1/F"] = self.ac_load_items["/Ac/L1/Frequency"].get_value()
+                elif self.grid_items["/Ac/L1/Frequency"] is not None:
+                    self._dbusservice["/Ac/ActiveIn/L1/F"] = self.ac_load_items["/Ac/L1/Frequency"].get_value()
+                else:
+                    self._dbusservice["/Ac/ActiveIn/L1/F"] = grid_frequency
+
+                # voltage
+                if self.ac_load_items["/Ac/L1/Voltage"] is not None:
+                    self._dbusservice["/Ac/ActiveIn/L1/V"] = self.ac_load_items["/Ac/L1/Voltage"].get_value()
+                elif self.grid_items["/Ac/L1/Voltage"] is not None:
+                    self._dbusservice["/Ac/ActiveIn/L1/V"] = self.grid_items["/Ac/L1/Voltage"].get_value()
+                else:
+                    self._dbusservice["/Ac/ActiveIn/L1/V"] = grid_nominal_voltage
+
+                # current
+                if self.ac_load_items["/Ac/L1/Current"] is not None:
+                    self._dbusservice["/Ac/ActiveIn/L1/I"] = self.ac_load_items["/Ac/L1/Current"].get_value()
+                else:
+                    self._dbusservice["/Ac/ActiveIn/L1/I"] = round(self._dbusservice["/Ac/ActiveIn/L1/P"] / self._dbusservice["/Ac/ActiveIn/L1/V"], 2)
+
+            # L2 ----
+            if "L2" in phase_used and self.ac_load_items["/Ac/L2/Power"] is not None:
+                # power
+                self._dbusservice["/Ac/ActiveIn/L2/P"] = self.ac_load_items["/Ac/L2/Power"].get_value()
+                self._dbusservice["/Ac/ActiveIn/L2/S"] = self._dbusservice["/Ac/ActiveIn/L2/P"]
+
+                # frequency
+                if self.ac_load_items["/Ac/L2/Frequency"] is not None:
+                    self._dbusservice["/Ac/ActiveIn/L2/F"] = self.ac_load_items["/Ac/L2/Frequency"].get_value()
+                elif self.grid_items["/Ac/L2/Frequency"] is not None:
+                    self._dbusservice["/Ac/ActiveIn/L2/F"] = self.ac_load_items["/Ac/L2/Frequency"].get_value()
+                else:
+                    self._dbusservice["/Ac/ActiveIn/L2/F"] = grid_frequency
+
+                # voltage
+                if self.ac_load_items["/Ac/L2/Voltage"] is not None:
+                    self._dbusservice["/Ac/ActiveIn/L2/V"] = self.ac_load_items["/Ac/L2/Voltage"].get_value()
+                elif self.grid_items["/Ac/L2/Voltage"] is not None:
+                    self._dbusservice["/Ac/ActiveIn/L2/V"] = self.grid_items["/Ac/L2/Voltage"].get_value()
+                else:
+                    self._dbusservice["/Ac/ActiveIn/L2/V"] = grid_nominal_voltage
+
+                # current
+                if self.ac_load_items["/Ac/L2/Current"] is not None:
+                    self._dbusservice["/Ac/ActiveIn/L2/I"] = self.ac_load_items["/Ac/L2/Current"].get_value()
+                else:
+                    self._dbusservice["/Ac/ActiveIn/L2/I"] = round(self._dbusservice["/Ac/ActiveIn/L2/P"] / self._dbusservice["/Ac/ActiveIn/L2/V"], 2)
+
+            # L3 ----
+            if "L3" in phase_used and self.ac_load_items["/Ac/L3/Power"] is not None:
+                # power
+                self._dbusservice["/Ac/ActiveIn/L3/P"] = self.ac_load_items["/Ac/L3/Power"].get_value()
+                self._dbusservice["/Ac/ActiveIn/L3/S"] = self._dbusservice["/Ac/ActiveIn/L3/P"]
+
+                # frequency
+                if self.ac_load_items["/Ac/L3/Frequency"] is not None:
+                    self._dbusservice["/Ac/ActiveIn/L3/F"] = self.ac_load_items["/Ac/L3/Frequency"].get_value()
+                elif self.grid_items["/Ac/L3/Frequency"] is not None:
+                    self._dbusservice["/Ac/ActiveIn/L3/F"] = self.ac_load_items["/Ac/L3/Frequency"].get_value()
+                else:
+                    self._dbusservice["/Ac/ActiveIn/L3/F"] = grid_frequency
+
+                # voltage
+                if self.ac_load_items["/Ac/L3/Voltage"] is not None:
+                    self._dbusservice["/Ac/ActiveIn/L3/V"] = self.ac_load_items["/Ac/L3/Voltage"].get_value()
+                elif self.grid_items["/Ac/L3/Voltage"] is not None:
+                    self._dbusservice["/Ac/ActiveIn/L3/V"] = self.grid_items["/Ac/L3/Voltage"].get_value()
+                else:
+                    self._dbusservice["/Ac/ActiveIn/L3/V"] = grid_nominal_voltage
+
+                # current
+                if self.ac_load_items["/Ac/L3/Current"] is not None:
+                    self._dbusservice["/Ac/ActiveIn/L3/I"] = self.ac_load_items["/Ac/L3/Current"].get_value()
+                else:
+                    self._dbusservice["/Ac/ActiveIn/L3/I"] = round(self._dbusservice["/Ac/ActiveIn/L3/P"] / self._dbusservice["/Ac/ActiveIn/L3/V"], 2)
+
+        else:
+            # L1 -----
+            if "L1" in phase_used:
+                # since the MultiPlus emulator is only integrating the power flowing from AC to DC and vice versa, the power is divided by the number of phases
+                self._dbusservice["/Ac/ActiveIn/L1/P"] = round((dc_power / phase_count if dc_power != 0 else 0), 0)
+                self._dbusservice["/Ac/ActiveIn/L1/S"] = self._dbusservice["/Ac/ActiveIn/L1/P"]
+
+                if self.grid_items["/Ac/L1/Frequency"] is not None:
+                    self._dbusservice["/Ac/ActiveIn/L1/F"] = self.grid_items["/Ac/L1/Frequency"].get_value()
+                else:
+                    self._dbusservice["/Ac/ActiveIn/L1/F"] = grid_frequency
+
+                # voltage
+                if self.grid_items["/Ac/L1/Voltage"] is not None:
+                    self._dbusservice["/Ac/ActiveIn/L1/V"] = self.grid_items["/Ac/L1/Voltage"].get_value()
+                else:
+                    self._dbusservice["/Ac/ActiveIn/L1/V"] = grid_nominal_voltage
+
+                # current
+                if self.grid_items["/Ac/L1/Current"] is not None:
+                    self._dbusservice["/Ac/ActiveIn/L1/I"] = self.grid_items["/Ac/L1/Current"].get_value()
+                else:
+                    self._dbusservice["/Ac/ActiveIn/L1/I"] = round(self._dbusservice["/Ac/ActiveIn/L1/P"] / self._dbusservice["/Ac/ActiveIn/L1/V"], 2)
+
+            # L2 -----
+            if "L2" in phase_used:
+                # since the MultiPlus emulator is only integrating the power flowing from AC to DC and vice versa, the power is divided by the number of phases
+                self._dbusservice["/Ac/ActiveIn/L2/P"] = round((dc_power / phase_count if dc_power != 0 else 0), 0)
+                self._dbusservice["/Ac/ActiveIn/L2/S"] = self._dbusservice["/Ac/ActiveIn/L2/P"]
+
+                if self.grid_items["/Ac/L2/Frequency"] is not None:
+                    self._dbusservice["/Ac/ActiveIn/L2/F"] = self.grid_items["/Ac/L2/Frequency"].get_value()
+                else:
+                    self._dbusservice["/Ac/ActiveIn/L2/F"] = grid_frequency
+
+                # voltage
+                if self.grid_items["/Ac/L2/Voltage"] is not None:
+                    self._dbusservice["/Ac/ActiveIn/L2/V"] = self.grid_items["/Ac/L2/Voltage"].get_value()
+                else:
+                    self._dbusservice["/Ac/ActiveIn/L2/V"] = grid_nominal_voltage
+
+                # current
+                if self.grid_items["/Ac/L2/Current"] is not None:
+                    self._dbusservice["/Ac/ActiveIn/L2/I"] = self.grid_items["/Ac/L2/Current"].get_value()
+                else:
+                    self._dbusservice["/Ac/ActiveIn/L2/I"] = round(self._dbusservice["/Ac/ActiveIn/L2/P"] / self._dbusservice["/Ac/ActiveIn/L2/V"], 2)
+
+            # L3 -----
+            if "L3" in phase_used:
+                # since the MultiPlus emulator is only integrating the power flowing from AC to DC and vice versa, the power is divided by the number of phases
+                self._dbusservice["/Ac/ActiveIn/L3/P"] = round((dc_power / phase_count if dc_power != 0 else 0), 0)
+                self._dbusservice["/Ac/ActiveIn/L3/S"] = self._dbusservice["/Ac/ActiveIn/L3/P"]
+
+                if self.grid_items["/Ac/L3/Frequency"] is not None:
+                    self._dbusservice["/Ac/ActiveIn/L3/F"] = self.grid_items["/Ac/L3/Frequency"].get_value()
+                else:
+                    self._dbusservice["/Ac/ActiveIn/L3/F"] = grid_frequency
+
+                # voltage
+                if self.grid_items["/Ac/L3/Voltage"] is not None:
+                    self._dbusservice["/Ac/ActiveIn/L3/V"] = self.grid_items["/Ac/L3/Voltage"].get_value()
+                else:
+                    self._dbusservice["/Ac/ActiveIn/L3/V"] = grid_nominal_voltage
+
+                # current
+                if self.grid_items["/Ac/L3/Current"] is not None:
+                    self._dbusservice["/Ac/ActiveIn/L3/I"] = self.grid_items["/Ac/L3/Current"].get_value()
+                else:
+                    self._dbusservice["/Ac/ActiveIn/L3/I"] = round(self._dbusservice["/Ac/ActiveIn/L3/P"] / self._dbusservice["/Ac/ActiveIn/L3/V"], 2)
 
         # calculate total values
         self._dbusservice["/Ac/ActiveIn/P"] = (
@@ -372,9 +442,9 @@ class DbusMultiPlusEmulator:
         # get values from BMS
         # for bubble flow in GUI
         self._dbusservice["/Dc/0/Current"] = dc_current
-        # self._dbusservice["/Dc/0/MaxChargeCurrent"] = self.battery_items["/Info/MaxChargeCurrent"]
+        # self._dbusservice["/Dc/0/MaxChargeCurrent"] = self.system_items["/Info/MaxChargeCurrent"]
         self._dbusservice["/Dc/0/Power"] = dc_power
-        self._dbusservice["/Dc/0/Temperature"] = self.battery_items["/Dc/Battery/Temperature"].get_value()
+        self._dbusservice["/Dc/0/Temperature"] = self.system_items["/Dc/Battery/Temperature"].get_value()
         self._dbusservice["/Dc/0/Voltage"] = dc_voltage
 
         self._dbusservice["/Devices/0/UpTime"] = int(time()) - time_driver_started
@@ -388,12 +458,12 @@ class DbusMultiPlusEmulator:
         self._dbusservice["/Energy/InverterToAcOut"] = json_data["dc"]["discharging"] if "dc" in json_data and "discharging" in json_data["dc"] else 0
         self._dbusservice["/Energy/OutToInverter"] = json_data["dc"]["charging"] if "dc" in json_data and "charging" in json_data["dc"] else 0
 
-        # self._dbusservice["/Hub/ChargeVoltage"] = self.battery_items["/Info/MaxChargeVoltage"]
+        # self._dbusservice["/Hub/ChargeVoltage"] = self.system_items["/Info/MaxChargeVoltage"]
 
-        # self._dbusservice["/Leds/Absorption"] = 1 if self.battery_items["/Info/ChargeMode"].startswith("Absorption") else 0
-        # self._dbusservice["/Leds/Bulk"] = 1 if self.battery_items["/Info/ChargeMode"].startswith("Bulk") else 0
-        # self._dbusservice["/Leds/Float"] = 1 if self.battery_items["/Info/ChargeMode"].startswith("Float") else 0
-        self._dbusservice["/Soc"] = self.battery_items["/Dc/Battery/Soc"].get_value()
+        # self._dbusservice["/Leds/Absorption"] = 1 if self.system_items["/Info/ChargeMode"].startswith("Absorption") else 0
+        # self._dbusservice["/Leds/Bulk"] = 1 if self.system_items["/Info/ChargeMode"].startswith("Bulk") else 0
+        # self._dbusservice["/Leds/Float"] = 1 if self.system_items["/Info/ChargeMode"].startswith("Float") else 0
+        self._dbusservice["/Soc"] = self.system_items["/Dc/Battery/Soc"].get_value()
 
         # increment UpdateIndex - to show that new data is available
         index = self._dbusservice["/UpdateIndex"] + 1  # increment index
@@ -738,88 +808,151 @@ def create_device_dbus_paths(device_number: int = 0):
 
 
 def setup_dbus_external_items():
+    global dbus_service_name_grid, dbus_service_name_ac_load
+
     # setup external dbus paths
     # connect to the sessionbus, on a CC GX the systembus is used
     dbus_connection = dbus.SessionBus() if "DBUS_SESSION_BUS_ADDRESS" in os.environ else dbus.SystemBus()
 
-    # BATTERY
+    # ----- BATTERY -----
     # check if the dbus service is available
-    dbus_service = "com.victronenergy.system"
-    is_present_in_vebus = dbus_service in dbus_connection.list_names()
+    dbus_service_system = "com.victronenergy.system"
+    is_present_in_vebus = dbus_service_system in dbus_connection.list_names()
 
     # dictionary containing the different items
-    dbus_objects_battery = {}
+    dbus_objects_system = {}
 
     if is_present_in_vebus:
-        dbus_objects_battery["/Dc/Battery/BatteryService"] = VeDbusItemImport(dbus_connection, dbus_service, "/Dc/Battery/BatteryService")
-        dbus_objects_battery["/Dc/Battery/Current"] = VeDbusItemImport(dbus_connection, dbus_service, "/Dc/Battery/Current")
-        dbus_objects_battery["/Dc/Battery/Power"] = VeDbusItemImport(dbus_connection, dbus_service, "/Dc/Battery/Power")
-        dbus_objects_battery["/Dc/Battery/Temperature"] = VeDbusItemImport(dbus_connection, dbus_service, "/Dc/Battery/Temperature")
-        dbus_objects_battery["/Dc/Battery/Voltage"] = VeDbusItemImport(dbus_connection, dbus_service, "/Dc/Battery/Voltage")
-        dbus_objects_battery["/Dc/Battery/Soc"] = VeDbusItemImport(dbus_connection, dbus_service, "/Dc/Battery/Soc")
+        dbus_objects_system["/Dc/Battery/BatteryService"] = VeDbusItemImport(dbus_connection, dbus_service_system, "/Dc/Battery/BatteryService")
+        dbus_objects_system["/Dc/Battery/Current"] = VeDbusItemImport(dbus_connection, dbus_service_system, "/Dc/Battery/Current")
+        dbus_objects_system["/Dc/Battery/Power"] = VeDbusItemImport(dbus_connection, dbus_service_system, "/Dc/Battery/Power")
+        dbus_objects_system["/Dc/Battery/Temperature"] = VeDbusItemImport(dbus_connection, dbus_service_system, "/Dc/Battery/Temperature")
+        dbus_objects_system["/Dc/Battery/Voltage"] = VeDbusItemImport(dbus_connection, dbus_service_system, "/Dc/Battery/Voltage")
+        dbus_objects_system["/Dc/Battery/Soc"] = VeDbusItemImport(dbus_connection, dbus_service_system, "/Dc/Battery/Soc")
 
-    # GRID
+    # ----- GRID -----
     # check if the dbus service is available
-    if dbusServiceNameGrid != "":
-        is_present_in_vebus = dbusServiceNameGrid in dbus_connection.list_names()
+    if dbus_service_name_grid != "":
+        is_present_in_vebus = dbus_service_name_grid in dbus_connection.list_names()
     # search for the first com.victronenergy.grid service
     else:
-        # Assuming `dbus_connection.list_names()` returns the dbus.Array as shown
         names = dbus_connection.list_names()
 
-        # Iterate through the array to find the first string containing "com.victronenergy.grid"
+        # create variable to store the first grid service name
+        dbus_service_name_grid = None
+
+        # iterate through the array to find the first string containing "com.victronenergy.grid"
         for name in names:
             if "com.victronenergy.grid" in name:
-                first_grid_string = name
+                dbus_service_name_grid = name
+                is_present_in_vebus = True
                 break
 
-        dbus_service = first_grid_string
-
-        logging.warning(f"No grid service name provided, using the first one found: {dbus_service}")
+        if dbus_service_name_grid is not None:
+            logging.info(f"No grid service name provided, using the first one found: {dbus_service_name_grid}")
 
     # dictionary containing the different items
     dbus_objects_grid = {}
 
     if is_present_in_vebus:
-        logging.info(f"{dbus_service} is present in dbus, setting up the grid values")
-        dbus_objects_grid["/Ac/L1/Power"] = VeDbusItemImport(dbus_connection, dbus_service, "/Ac/L1/Power")
-        dbus_objects_grid["/Ac/L1/Current"] = VeDbusItemImport(dbus_connection, dbus_service, "/Ac/L1/Current")
-        dbus_objects_grid["/Ac/L1/Voltage"] = VeDbusItemImport(dbus_connection, dbus_service, "/Ac/L1/Voltage")
-        dbus_objects_grid["/Ac/L1/Frequency"] = VeDbusItemImport(dbus_connection, dbus_service, "/Ac/L1/Frequency")
+        logging.info(f"{dbus_service_name_grid} is present in dbus, setting up the grid values")
+        dbus_objects_grid["/Ac/L1/Power"] = VeDbusItemImport(dbus_connection, dbus_service_name_grid, "/Ac/L1/Power")
+        dbus_objects_grid["/Ac/L1/Current"] = VeDbusItemImport(dbus_connection, dbus_service_name_grid, "/Ac/L1/Current")
+        dbus_objects_grid["/Ac/L1/Voltage"] = VeDbusItemImport(dbus_connection, dbus_service_name_grid, "/Ac/L1/Voltage")
+        dbus_objects_grid["/Ac/L1/Frequency"] = VeDbusItemImport(dbus_connection, dbus_service_name_grid, "/Ac/L1/Frequency")
 
-        dbus_objects_grid["/Ac/L2/Power"] = VeDbusItemImport(dbus_connection, dbus_service, "/Ac/L2/Power")
-        dbus_objects_grid["/Ac/L2/Current"] = VeDbusItemImport(dbus_connection, dbus_service, "/Ac/L2/Current")
-        dbus_objects_grid["/Ac/L2/Voltage"] = VeDbusItemImport(dbus_connection, dbus_service, "/Ac/L2/Voltage")
-        dbus_objects_grid["/Ac/L2/Frequency"] = VeDbusItemImport(dbus_connection, dbus_service, "/Ac/L2/Frequency")
+        dbus_objects_grid["/Ac/L2/Power"] = VeDbusItemImport(dbus_connection, dbus_service_name_grid, "/Ac/L2/Power")
+        dbus_objects_grid["/Ac/L2/Current"] = VeDbusItemImport(dbus_connection, dbus_service_name_grid, "/Ac/L2/Current")
+        dbus_objects_grid["/Ac/L2/Voltage"] = VeDbusItemImport(dbus_connection, dbus_service_name_grid, "/Ac/L2/Voltage")
+        dbus_objects_grid["/Ac/L2/Frequency"] = VeDbusItemImport(dbus_connection, dbus_service_name_grid, "/Ac/L2/Frequency")
 
-        dbus_objects_grid["/Ac/L3/Power"] = VeDbusItemImport(dbus_connection, dbus_service, "/Ac/L3/Power")
-        dbus_objects_grid["/Ac/L3/Current"] = VeDbusItemImport(dbus_connection, dbus_service, "/Ac/L3/Current")
-        dbus_objects_grid["/Ac/L3/Voltage"] = VeDbusItemImport(dbus_connection, dbus_service, "/Ac/L3/Voltage")
-        dbus_objects_grid["/Ac/L3/Frequency"] = VeDbusItemImport(dbus_connection, dbus_service, "/Ac/L3/Frequency")
+        dbus_objects_grid["/Ac/L3/Power"] = VeDbusItemImport(dbus_connection, dbus_service_name_grid, "/Ac/L3/Power")
+        dbus_objects_grid["/Ac/L3/Current"] = VeDbusItemImport(dbus_connection, dbus_service_name_grid, "/Ac/L3/Current")
+        dbus_objects_grid["/Ac/L3/Voltage"] = VeDbusItemImport(dbus_connection, dbus_service_name_grid, "/Ac/L3/Voltage")
+        dbus_objects_grid["/Ac/L3/Frequency"] = VeDbusItemImport(dbus_connection, dbus_service_name_grid, "/Ac/L3/Frequency")
 
-        dbus_objects_grid["/Ac/Power"] = VeDbusItemImport(dbus_connection, dbus_service, "/Ac/Power")
-        dbus_objects_grid["/Ac/Current"] = VeDbusItemImport(dbus_connection, dbus_service, "/Ac/Current")
-        dbus_objects_grid["/Ac/Voltage"] = VeDbusItemImport(dbus_connection, dbus_service, "/Ac/Voltage")
+        dbus_objects_grid["/Ac/Power"] = VeDbusItemImport(dbus_connection, dbus_service_name_grid, "/Ac/Power")
+        dbus_objects_grid["/Ac/Current"] = VeDbusItemImport(dbus_connection, dbus_service_name_grid, "/Ac/Current")
+        dbus_objects_grid["/Ac/Voltage"] = VeDbusItemImport(dbus_connection, dbus_service_name_grid, "/Ac/Voltage")
+
+    # ----- AC LOAD -----
+    # check if the dbus service is available
+    if dbus_service_name_ac_load != "":
+        is_present_in_vebus = dbus_service_name_ac_load in dbus_connection.list_names()
+    # search for the first com.victronenergy.acload service
+    else:
+        names = dbus_connection.list_names()
+
+        # create variable to store the first ac load service name
+        dbus_service_name_ac_load = None
+
+        # iterate through the array to find the first string containing "com.victronenergy.acload"
+        for name in names:
+            if "com.victronenergy.acload" in name:
+                dbus_service_name_ac_load = name
+                is_present_in_vebus = True
+                break
+
+        if dbus_service_name_ac_load is not None:
+            logging.info(f"No AC Load service name provided, using the first one found: {dbus_service_name_ac_load}")
+
+    # dictionary containing the different items
+    dbus_objects_ac_load = {}
+
+    if is_present_in_vebus:
+        logging.info(f"{dbus_service_name_ac_load} is present in dbus, setting up the ac load values")
+        dbus_objects_ac_load["/Ac/L1/Power"] = VeDbusItemImport(dbus_connection, dbus_service_name_ac_load, "/Ac/L1/Power")
+        dbus_objects_ac_load["/Ac/L1/Current"] = VeDbusItemImport(dbus_connection, dbus_service_name_ac_load, "/Ac/L1/Current")
+        dbus_objects_ac_load["/Ac/L1/Voltage"] = VeDbusItemImport(dbus_connection, dbus_service_name_ac_load, "/Ac/L1/Voltage")
+        dbus_objects_ac_load["/Ac/L1/Frequency"] = VeDbusItemImport(dbus_connection, dbus_service_name_ac_load, "/Ac/L1/Frequency")
+
+        dbus_objects_ac_load["/Ac/L2/Power"] = VeDbusItemImport(dbus_connection, dbus_service_name_ac_load, "/Ac/L2/Power")
+        dbus_objects_ac_load["/Ac/L2/Current"] = VeDbusItemImport(dbus_connection, dbus_service_name_ac_load, "/Ac/L2/Current")
+        dbus_objects_ac_load["/Ac/L2/Voltage"] = VeDbusItemImport(dbus_connection, dbus_service_name_ac_load, "/Ac/L2/Voltage")
+        dbus_objects_ac_load["/Ac/L2/Frequency"] = VeDbusItemImport(dbus_connection, dbus_service_name_ac_load, "/Ac/L2/Frequency")
+
+        dbus_objects_ac_load["/Ac/L3/Power"] = VeDbusItemImport(dbus_connection, dbus_service_name_ac_load, "/Ac/L3/Power")
+        dbus_objects_ac_load["/Ac/L3/Current"] = VeDbusItemImport(dbus_connection, dbus_service_name_ac_load, "/Ac/L3/Current")
+        dbus_objects_ac_load["/Ac/L3/Voltage"] = VeDbusItemImport(dbus_connection, dbus_service_name_ac_load, "/Ac/L3/Voltage")
+        dbus_objects_ac_load["/Ac/L3/Frequency"] = VeDbusItemImport(dbus_connection, dbus_service_name_ac_load, "/Ac/L3/Frequency")
+
+        dbus_objects_ac_load["/Ac/Power"] = VeDbusItemImport(dbus_connection, dbus_service_name_ac_load, "/Ac/Power")
+        dbus_objects_ac_load["/Ac/Current"] = VeDbusItemImport(dbus_connection, dbus_service_name_ac_load, "/Ac/Current")
+        dbus_objects_ac_load["/Ac/Voltage"] = VeDbusItemImport(dbus_connection, dbus_service_name_ac_load, "/Ac/Voltage")
 
     logging.info("*** Found values ***")
 
-    for item in dbus_objects_battery:
-        # remove items that does not exist
-        if dbus_objects_battery[item].exists:
-            logging.info(f"{item} = {dbus_objects_battery[item].get_value()}")
-        else:
-            dbus_objects_battery[item] = None
-            logging.debug(f"{item} does not exist, removed from grid values")
+    if dbus_service_system != "":
+        logging.info(f"Dbus service name: {dbus_service_system}")
+        for item in dbus_objects_system:
+            # remove items that does not exist
+            if dbus_objects_system[item].exists:
+                logging.info(f"{item} = {dbus_objects_system[item].get_value()}")
+            else:
+                dbus_objects_system[item] = None
+                logging.debug(f"{item} does not exist, removed from grid values")
 
-    for item in dbus_objects_grid:
-        # remove items that does not exist
-        if dbus_objects_grid[item].exists:
-            logging.info(f"{item} = {dbus_objects_grid[item].get_value()}")
-        else:
-            dbus_objects_grid[item] = None
-            logging.debug(f"{item} does not exist, removed from grid values")
+    if dbus_service_name_grid != "":
+        logging.info(f"Dbus service name: {dbus_service_name_grid}")
+        for item in dbus_objects_grid:
+            # remove items that does not exist
+            if dbus_objects_grid[item].exists:
+                logging.info(f"{item} = {dbus_objects_grid[item].get_value()}")
+            else:
+                dbus_objects_grid[item] = None
+                logging.debug(f"{item} does not exist, removed from grid values")
 
-    return dbus_objects_battery, dbus_objects_grid
+    if dbus_service_name_ac_load != "":
+        logging.info(f"Dbus service name: {dbus_service_name_ac_load}")
+        for item in dbus_objects_ac_load:
+            # remove items that does not exist
+            if dbus_objects_ac_load[item].exists:
+                logging.info(f"{item} = {dbus_objects_ac_load[item].get_value()}")
+            else:
+                dbus_objects_ac_load[item] = None
+                logging.debug(f"{item} does not exist, removed from ac_load values")
+
+    return dbus_objects_system, dbus_objects_grid, dbus_objects_ac_load
 
 
 # formatting
@@ -1219,7 +1352,7 @@ def main():
     time_driver_started = int(time())
 
     # has to be called before DbusMultiPlusEmulator() else it does not work
-    battery_items, grid_items = setup_dbus_external_items()
+    system_items, grid_items, ac_load_items = setup_dbus_external_items()
 
     dbus_multiplus_emulator = DbusMultiPlusEmulator(
         servicename="com.victronenergy.vebus.ttyS3",
@@ -1227,8 +1360,9 @@ def main():
         paths=paths_multiplus_dbus,
     )
 
-    dbus_multiplus_emulator.battery_items = battery_items
+    dbus_multiplus_emulator.system_items = system_items
     dbus_multiplus_emulator.grid_items = grid_items
+    dbus_multiplus_emulator.ac_load_items = ac_load_items
 
     logging.info("Connected to dbus and switching over to GLib.MainLoop() (= event based)")
     mainloop = GLib.MainLoop()
