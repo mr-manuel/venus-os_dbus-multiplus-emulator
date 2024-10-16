@@ -145,7 +145,7 @@ class DbusMultiPlusEmulator:
         self.grid_items = {}
         self.ac_load_items = {}
 
-        logging.info("Starting the main loop")
+        logging.info("-- Initializing completed, starting the main loop")
 
         GLib.timeout_add(1000, self._update)  # pause 1000ms before the next request
 
@@ -156,7 +156,8 @@ class DbusMultiPlusEmulator:
         return value if value is not None else 0
 
     def _update(self):
-        global data_watt_hours, data_watt_hours_timespan, data_watt_hours_save, data_watt_hours_storage_file, data_watt_hours_working_file, json_data, timestamp_storage_file
+        global data_watt_hours, data_watt_hours_timespan, data_watt_hours_save
+        global data_watt_hours_storage_file, data_watt_hours_working_file, json_data, timestamp_storage_file
 
         # ##################################################################################################################
 
@@ -176,45 +177,45 @@ class DbusMultiPlusEmulator:
         # timestamp
         timestamp = int(time())
 
-        # check if x seconds are passed, if not sum values for calculation
-        if data_watt_hours["time_creation"] + data_watt_hours_timespan > timestamp:
-            data_watt_hours_dc = {
-                "charging": round(
-                    (data_watt_hours["dc"]["charging"] + dc_power_charging if "dc" in data_watt_hours else dc_power_charging),
-                    3,
-                ),
-                "discharging": round(
-                    (data_watt_hours["dc"]["discharging"] + dc_power_discharging if "dc" in data_watt_hours else dc_power_discharging),
-                    3,
-                ),
+        # sum up values for consumption calculation
+        data_watt_hours_dc = {
+            "charging": round(
+                (data_watt_hours["dc"]["charging"] + dc_power_charging if "dc" in data_watt_hours else dc_power_charging),
+                3,
+            ),
+            "discharging": round(
+                (data_watt_hours["dc"]["discharging"] + dc_power_discharging if "dc" in data_watt_hours else dc_power_discharging),
+                3,
+            ),
+        }
+
+        data_watt_hours.update(
+            {
+                "dc": data_watt_hours_dc,
+                "count": data_watt_hours["count"] + 1,
             }
+        )
 
-            data_watt_hours.update(
-                {
-                    "dc": data_watt_hours_dc,
-                    "count": data_watt_hours["count"] + 1,
-                }
-            )
-
-            logging.debug("--> data_watt_hours(): %s" % json.dumps(data_watt_hours))
+        logging.debug("--> data_watt_hours(): %s" % json.dumps(data_watt_hours))
 
         # build mean, calculate time diff and Wh and write to file
-        else:
+        # check if at least x seconds are passed
+        if data_watt_hours["time_creation"] + data_watt_hours_timespan < timestamp:
             # check if file in volatile storage exists
             if os.path.isfile(data_watt_hours_working_file):
                 with open(data_watt_hours_working_file, "r") as file:
                     file = open(data_watt_hours_working_file, "r")
                     data_watt_hours_old = json.load(file)
-                    logging.info("Loaded JSON")
-                    logging.info(json.dumps(data_watt_hours_old))
+                    logging.debug("Loaded JSON")
+                    logging.debug(json.dumps(data_watt_hours_old))
 
             # if not, check if file in persistent storage exists
             elif os.path.isfile(data_watt_hours_storage_file):
                 with open(data_watt_hours_storage_file, "r") as file:
                     file = open(data_watt_hours_storage_file, "r")
                     data_watt_hours_old = json.load(file)
-                    logging.info("Loaded JSON from persistent storage")
-                    logging.info(json.dumps(data_watt_hours_old))
+                    logging.debug("Loaded JSON from persistent storage")
+                    logging.debug(json.dumps(data_watt_hours_old))
 
             # if not, generate data
             else:
@@ -223,8 +224,8 @@ class DbusMultiPlusEmulator:
                     "discharging": 0,
                 }
                 data_watt_hours_old = {"dc": data_watt_hours_old_dc}
-                logging.info("Generated JSON")
-                logging.info(json.dumps(data_watt_hours_old))
+                logging.debug("Generated JSON")
+                logging.debug(json.dumps(data_watt_hours_old))
 
             # factor to calculate Watthours: mean power * measuuring period / 3600 seconds (1 hour)
             factor = (timestamp - data_watt_hours["time_creation"]) / 3600
@@ -269,7 +270,7 @@ class DbusMultiPlusEmulator:
                 "count": 1,
             }
 
-            logging.info("--> data_watt_hours(): %s" % json.dumps(data_watt_hours))
+            logging.debug("--> data_watt_hours(): %s" % json.dumps(data_watt_hours))
 
         # update values in dbus
         # for bubble flow in chart and load visualization
@@ -284,7 +285,7 @@ class DbusMultiPlusEmulator:
                 # frequency
                 if self.ac_load_items["/Ac/L1/Frequency"] is not None:
                     self._dbusservice["/Ac/ActiveIn/L1/F"] = self.ac_load_items["/Ac/L1/Frequency"].get_value()
-                elif self.grid_items["/Ac/L1/Frequency"] is not None:
+                elif self.grid_items != {} and self.grid_items["/Ac/L1/Frequency"] is not None:
                     self._dbusservice["/Ac/ActiveIn/L1/F"] = self.ac_load_items["/Ac/L1/Frequency"].get_value()
                 else:
                     self._dbusservice["/Ac/ActiveIn/L1/F"] = grid_frequency
@@ -292,7 +293,7 @@ class DbusMultiPlusEmulator:
                 # voltage
                 if self.ac_load_items["/Ac/L1/Voltage"] is not None:
                     self._dbusservice["/Ac/ActiveIn/L1/V"] = self.ac_load_items["/Ac/L1/Voltage"].get_value()
-                elif self.grid_items["/Ac/L1/Voltage"] is not None:
+                elif self.grid_items != {} and self.grid_items["/Ac/L1/Voltage"] is not None:
                     self._dbusservice["/Ac/ActiveIn/L1/V"] = self.grid_items["/Ac/L1/Voltage"].get_value()
                 else:
                     self._dbusservice["/Ac/ActiveIn/L1/V"] = grid_nominal_voltage
@@ -312,7 +313,7 @@ class DbusMultiPlusEmulator:
                 # frequency
                 if self.ac_load_items["/Ac/L2/Frequency"] is not None:
                     self._dbusservice["/Ac/ActiveIn/L2/F"] = self.ac_load_items["/Ac/L2/Frequency"].get_value()
-                elif self.grid_items["/Ac/L2/Frequency"] is not None:
+                elif self.grid_items != {} and self.grid_items["/Ac/L2/Frequency"] is not None:
                     self._dbusservice["/Ac/ActiveIn/L2/F"] = self.ac_load_items["/Ac/L2/Frequency"].get_value()
                 else:
                     self._dbusservice["/Ac/ActiveIn/L2/F"] = grid_frequency
@@ -320,7 +321,7 @@ class DbusMultiPlusEmulator:
                 # voltage
                 if self.ac_load_items["/Ac/L2/Voltage"] is not None:
                     self._dbusservice["/Ac/ActiveIn/L2/V"] = self.ac_load_items["/Ac/L2/Voltage"].get_value()
-                elif self.grid_items["/Ac/L2/Voltage"] is not None:
+                elif self.grid_items != {} and self.grid_items["/Ac/L2/Voltage"] is not None:
                     self._dbusservice["/Ac/ActiveIn/L2/V"] = self.grid_items["/Ac/L2/Voltage"].get_value()
                 else:
                     self._dbusservice["/Ac/ActiveIn/L2/V"] = grid_nominal_voltage
@@ -340,7 +341,7 @@ class DbusMultiPlusEmulator:
                 # frequency
                 if self.ac_load_items["/Ac/L3/Frequency"] is not None:
                     self._dbusservice["/Ac/ActiveIn/L3/F"] = self.ac_load_items["/Ac/L3/Frequency"].get_value()
-                elif self.grid_items["/Ac/L3/Frequency"] is not None:
+                elif self.grid_items != {} and self.grid_items["/Ac/L3/Frequency"] is not None:
                     self._dbusservice["/Ac/ActiveIn/L3/F"] = self.ac_load_items["/Ac/L3/Frequency"].get_value()
                 else:
                     self._dbusservice["/Ac/ActiveIn/L3/F"] = grid_frequency
@@ -348,7 +349,7 @@ class DbusMultiPlusEmulator:
                 # voltage
                 if self.ac_load_items["/Ac/L3/Voltage"] is not None:
                     self._dbusservice["/Ac/ActiveIn/L3/V"] = self.ac_load_items["/Ac/L3/Voltage"].get_value()
-                elif self.grid_items["/Ac/L3/Voltage"] is not None:
+                elif self.grid_items != {} and self.grid_items["/Ac/L3/Voltage"] is not None:
                     self._dbusservice["/Ac/ActiveIn/L3/V"] = self.grid_items["/Ac/L3/Voltage"].get_value()
                 else:
                     self._dbusservice["/Ac/ActiveIn/L3/V"] = grid_nominal_voltage
@@ -366,19 +367,19 @@ class DbusMultiPlusEmulator:
                 self._dbusservice["/Ac/ActiveIn/L1/P"] = round((dc_power / phase_count if dc_power != 0 else 0), 0)
                 self._dbusservice["/Ac/ActiveIn/L1/S"] = self._dbusservice["/Ac/ActiveIn/L1/P"]
 
-                if self.grid_items["/Ac/L1/Frequency"] is not None:
+                if self.grid_items != {} and self.grid_items["/Ac/L1/Frequency"] is not None:
                     self._dbusservice["/Ac/ActiveIn/L1/F"] = self.grid_items["/Ac/L1/Frequency"].get_value()
                 else:
                     self._dbusservice["/Ac/ActiveIn/L1/F"] = grid_frequency
 
                 # voltage
-                if self.grid_items["/Ac/L1/Voltage"] is not None:
+                if self.grid_items != {} and self.grid_items["/Ac/L1/Voltage"] is not None:
                     self._dbusservice["/Ac/ActiveIn/L1/V"] = self.grid_items["/Ac/L1/Voltage"].get_value()
                 else:
                     self._dbusservice["/Ac/ActiveIn/L1/V"] = grid_nominal_voltage
 
                 # current
-                if self.grid_items["/Ac/L1/Current"] is not None:
+                if self.grid_items != {} and self.grid_items["/Ac/L1/Current"] is not None:
                     self._dbusservice["/Ac/ActiveIn/L1/I"] = self.grid_items["/Ac/L1/Current"].get_value()
                 else:
                     self._dbusservice["/Ac/ActiveIn/L1/I"] = round(self._dbusservice["/Ac/ActiveIn/L1/P"] / self._dbusservice["/Ac/ActiveIn/L1/V"], 2)
@@ -389,19 +390,19 @@ class DbusMultiPlusEmulator:
                 self._dbusservice["/Ac/ActiveIn/L2/P"] = round((dc_power / phase_count if dc_power != 0 else 0), 0)
                 self._dbusservice["/Ac/ActiveIn/L2/S"] = self._dbusservice["/Ac/ActiveIn/L2/P"]
 
-                if self.grid_items["/Ac/L2/Frequency"] is not None:
+                if self.grid_items != {} and self.grid_items["/Ac/L2/Frequency"] is not None:
                     self._dbusservice["/Ac/ActiveIn/L2/F"] = self.grid_items["/Ac/L2/Frequency"].get_value()
                 else:
                     self._dbusservice["/Ac/ActiveIn/L2/F"] = grid_frequency
 
                 # voltage
-                if self.grid_items["/Ac/L2/Voltage"] is not None:
+                if self.grid_items != {} and self.grid_items["/Ac/L2/Voltage"] is not None:
                     self._dbusservice["/Ac/ActiveIn/L2/V"] = self.grid_items["/Ac/L2/Voltage"].get_value()
                 else:
                     self._dbusservice["/Ac/ActiveIn/L2/V"] = grid_nominal_voltage
 
                 # current
-                if self.grid_items["/Ac/L2/Current"] is not None:
+                if self.grid_items != {} and self.grid_items["/Ac/L2/Current"] is not None:
                     self._dbusservice["/Ac/ActiveIn/L2/I"] = self.grid_items["/Ac/L2/Current"].get_value()
                 else:
                     self._dbusservice["/Ac/ActiveIn/L2/I"] = round(self._dbusservice["/Ac/ActiveIn/L2/P"] / self._dbusservice["/Ac/ActiveIn/L2/V"], 2)
@@ -412,19 +413,19 @@ class DbusMultiPlusEmulator:
                 self._dbusservice["/Ac/ActiveIn/L3/P"] = round((dc_power / phase_count if dc_power != 0 else 0), 0)
                 self._dbusservice["/Ac/ActiveIn/L3/S"] = self._dbusservice["/Ac/ActiveIn/L3/P"]
 
-                if self.grid_items["/Ac/L3/Frequency"] is not None:
+                if self.grid_items != {} and self.grid_items["/Ac/L3/Frequency"] is not None:
                     self._dbusservice["/Ac/ActiveIn/L3/F"] = self.grid_items["/Ac/L3/Frequency"].get_value()
                 else:
                     self._dbusservice["/Ac/ActiveIn/L3/F"] = grid_frequency
 
                 # voltage
-                if self.grid_items["/Ac/L3/Voltage"] is not None:
+                if self.grid_items != {} and self.grid_items["/Ac/L3/Voltage"] is not None:
                     self._dbusservice["/Ac/ActiveIn/L3/V"] = self.grid_items["/Ac/L3/Voltage"].get_value()
                 else:
                     self._dbusservice["/Ac/ActiveIn/L3/V"] = grid_nominal_voltage
 
                 # current
-                if self.grid_items["/Ac/L3/Current"] is not None:
+                if self.grid_items != {} and self.grid_items["/Ac/L3/Current"] is not None:
                     self._dbusservice["/Ac/ActiveIn/L3/I"] = self.grid_items["/Ac/L3/Current"].get_value()
                 else:
                     self._dbusservice["/Ac/ActiveIn/L3/I"] = round(self._dbusservice["/Ac/ActiveIn/L3/P"] / self._dbusservice["/Ac/ActiveIn/L3/V"], 2)
@@ -814,10 +815,13 @@ def setup_dbus_external_items():
     # connect to the sessionbus, on a CC GX the systembus is used
     dbus_connection = dbus.SessionBus() if "DBUS_SESSION_BUS_ADDRESS" in os.environ else dbus.SystemBus()
 
+    # list of dbus services
+    dbus_services = dbus_connection.list_names()
+
     # ----- BATTERY -----
     # check if the dbus service is available
     dbus_service_system = "com.victronenergy.system"
-    is_present_in_vebus = dbus_service_system in dbus_connection.list_names()
+    is_present_in_vebus = dbus_service_system in dbus_services
 
     # dictionary containing the different items
     dbus_objects_system = {}
@@ -833,16 +837,14 @@ def setup_dbus_external_items():
     # ----- GRID -----
     # check if the dbus service is available
     if dbus_service_name_grid != "":
-        is_present_in_vebus = dbus_service_name_grid in dbus_connection.list_names()
+        is_present_in_vebus = dbus_service_name_grid in dbus_services
     # search for the first com.victronenergy.grid service
     else:
-        names = dbus_connection.list_names()
-
         # create variable to store the first grid service name
         dbus_service_name_grid = None
 
         # iterate through the array to find the first string containing "com.victronenergy.grid"
-        for name in names:
+        for name in dbus_services:
             if "com.victronenergy.grid" in name:
                 dbus_service_name_grid = name
                 is_present_in_vebus = True
@@ -878,16 +880,14 @@ def setup_dbus_external_items():
     # ----- AC LOAD -----
     # check if the dbus service is available
     if dbus_service_name_ac_load != "":
-        is_present_in_vebus = dbus_service_name_ac_load in dbus_connection.list_names()
+        is_present_in_vebus = dbus_service_name_ac_load in dbus_services
     # search for the first com.victronenergy.acload service
     else:
-        names = dbus_connection.list_names()
-
         # create variable to store the first ac load service name
         dbus_service_name_ac_load = None
 
         # iterate through the array to find the first string containing "com.victronenergy.acload"
-        for name in names:
+        for name in dbus_services:
             if "com.victronenergy.acload" in name:
                 dbus_service_name_ac_load = name
                 is_present_in_vebus = True
