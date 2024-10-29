@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.0.0
+* Added: Calculate ratio between phases based on grid and PV inverter
+* Added: Config file for more convinient settings changes
+* Added: Specify an AC Load Meter to get correct inverter data
+* Changed: Fixed wrong calculations
+* Changed: Rewrote the whole driver
+
 ## v0.1.0
 * Added: Support for three phases
 * Added: Some fields

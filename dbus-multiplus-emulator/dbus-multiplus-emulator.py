@@ -5,9 +5,10 @@ import logging
 import sys
 import os
 import _thread
-from time import time
+from time import sleep, time
 from typing import Union
 import json
+import configparser  # for config/ini file
 
 import dbus
 from gi.repository import GLib
@@ -19,44 +20,62 @@ sys.path.insert(1, os.path.join(os.path.dirname(__file__), "ext", "velib_python"
 from vedbus import VeDbusService
 from vedbus import VeDbusItemImport
 
-# use WARNING for default, INFO for displaying actual steps and values, DEBUG for debugging
-logging.basicConfig(level=logging.INFO)
+
+# get values from config.ini file
+try:
+    config_file = (os.path.dirname(os.path.realpath(__file__))) + "/config.ini"
+    if os.path.exists(config_file):
+        config = configparser.ConfigParser()
+        config.read(config_file)
+    else:
+        print('ERROR:The "' + config_file + '" is not found. Did you copy or rename the "config.sample.ini" to "config.ini"? The driver restarts in 60 seconds.')
+        sleep(60)
+        sys.exit()
+
+except Exception:
+    exception_type, exception_object, exception_traceback = sys.exc_info()
+    file = exception_traceback.tb_frame.f_code.co_filename
+    line = exception_traceback.tb_lineno
+    print(f"Exception occurred: {repr(exception_object)} of type {exception_type} in {file} line #{line}")
+    print("ERROR:The driver restarts in 60 seconds.")
+    sleep(60)
+    sys.exit()
 
 
-# ------------------ USER CHANGABLE VALUES | START ------------------
+# Get logging level from config.ini
+# ERROR = shows errors only
+# WARNING = shows ERROR and warnings
+# INFO = shows WARNING and running functions
+# DEBUG = shows INFO and data/values
+if "DEFAULT" in config and "logging" in config["DEFAULT"]:
+    if config["DEFAULT"]["logging"] == "DEBUG":
+        logging.basicConfig(level=logging.DEBUG)
+    elif config["DEFAULT"]["logging"] == "INFO":
+        logging.basicConfig(level=logging.INFO)
+    elif config["DEFAULT"]["logging"] == "ERROR":
+        logging.basicConfig(level=logging.ERROR)
+    else:
+        logging.basicConfig(level=logging.WARNING)
+else:
+    logging.basicConfig(level=logging.WARNING)
 
-# enter grid frequency
-# Europe
-grid_frequency = 50.0000
-# UK/USA
-# grid_frequency = 60.0000
+# get values from config.ini file
+phase_used = config["DEFAULT"]["phase_used"].replace(" ", "").split(",")
 
-# enter grid nominal voltage
-# Europe
-grid_nominal_voltage = 230.0
-# UK/USA
-# grid_nominal_voltage = 120.0
+inverter_max_power = int(config["DEFAULT"]["inverter_max_power"])
+dbus_service_name_grid = config["DEFAULT"]["dbus_service_name_grid"]
+dbus_service_name_ac_load = config["DEFAULT"]["dbus_service_name_ac_load"]
+grid_frequency = int(config["DEFAULT"]["grid_frequency"])
+grid_nominal_voltage = int(config["DEFAULT"]["grid_nominal_voltage"])
 
-# enter the dbus service name from which the grid meter data should be fetched, if there is more than one
-# e.g. com.victronenergy.grid.mqtt_grid_31
-dbus_service_name_grid = ""
 
-# enter the maximum power of the inverter of a single phase
-inverter_max_power = 4500
-
-# uncomment or change the phase combination you are using
-# default: ["L1"]
-phase_used = ["L1"]
-# phase_used = ["L1", "L2"]
-# phase_used = ["L1", "L2", "L3"]
-
-# if there is more then one phase, the emulator can only divide the DC power equally to all AC phases
-# since in reality this is rarely the case, it's possible to set an ac load meter which provides the power of each inverter per phase
-# enter the dbus service name from which the ac load meter data should be fetched, if there is more than one
-# e.g. com.victronenergy.acload.mqtt_acload_31
-dbus_service_name_ac_load = ""
-
-# ------------------ USER CHANGABLE VALUES | END --------------------
+# check if the phase_used list is valid
+valid_phases = {"L1", "L2", "L3"}
+for phase in phase_used:
+    if phase not in valid_phases:
+        logging.error(f"Invalid phase {phase} in phase_used list. Valid phases are {valid_phases}.")
+        sleep(60)
+        sys.exit()
 
 
 # specify how many phases are connected
@@ -99,7 +118,7 @@ class DbusMultiPlusEmulator:
         servicename,
         deviceinstance,
         paths,
-        productname="MultiPlus-II xx/5000/xx-xx (emulated)",
+        productname=(config["DEFAULT"]["device_name"]),
         connection="VE.Bus",
     ):
         self._dbusservice = VeDbusService(servicename, register=False)
@@ -121,7 +140,7 @@ class DbusMultiPlusEmulator:
         self._dbusservice.add_path("/ProductName", productname)
         self._dbusservice.add_path("/CustomName", "")
         self._dbusservice.add_path("/FirmwareVersion", 1296)
-        self._dbusservice.add_path("/HardwareVersion", "1.0.0 (20241016)")
+        self._dbusservice.add_path("/HardwareVersion", "1.0.0-beta1 (20241029)")
         self._dbusservice.add_path("/Connected", 1)
 
         # self._dbusservice.add_path('/Latency', None)
@@ -385,9 +404,9 @@ class DbusMultiPlusEmulator:
             ac_total_power = ac_total_L1_power + ac_total_L2_power + ac_total_L3_power
 
             # calculate the ratio of power between each phases
-            ratio_L1 = round(ac_total_L1_power / ac_total_power, 4)
-            ratio_L2 = round(ac_total_L2_power / ac_total_power, 4)
-            ratio_L3 = round(ac_total_L3_power / ac_total_power, 4)
+            ratio_L1 = round((ac_total_L1_power / ac_total_power) if ac_total_power != 0 else 0, 4)
+            ratio_L2 = round((ac_total_L2_power / ac_total_power) if ac_total_power != 0 else 0, 4)
+            ratio_L3 = round((ac_total_L3_power / ac_total_power) if ac_total_power != 0 else 0, 4)
 
             logging.debug(f"ratio_L1: {ratio_L1}, ratio_L2: {ratio_L2}, ratio_L3: {ratio_L3}")
 
@@ -877,6 +896,7 @@ def setup_dbus_external_items():
 
     # check if the dbus service is available
     if dbus_service_name_grid != "":
+        logging.info(f"Fetched dbus_service_name_grid from config: {dbus_service_name_grid}")
         is_present_in_vebus = dbus_service_name_grid in dbus_services
     # search for the first com.victronenergy.grid service
     else:
@@ -922,6 +942,7 @@ def setup_dbus_external_items():
 
     # check if the dbus service is available
     if dbus_service_name_ac_load != "":
+        logging.info(f"Fetched dbus_service_name_ac_load from config: {dbus_service_name_ac_load}")
         is_present_in_vebus = dbus_service_name_ac_load in dbus_services
     # search for the first com.victronenergy.acload service
     else:
@@ -965,7 +986,7 @@ def setup_dbus_external_items():
     logging.info("*** Found values ***")
 
     if dbus_service_system != "":
-        logging.info(f"Dbus service name: {dbus_service_system}")
+        logging.info(f"Dbus system service name: {dbus_service_system}")
         for item in dbus_objects_system:
             # remove items that does not exist
             if dbus_objects_system[item].exists:
@@ -975,7 +996,7 @@ def setup_dbus_external_items():
                 logging.debug(f"{item} does not exist, removed from grid values")
 
     if dbus_service_name_grid != "":
-        logging.info(f"Dbus service name: {dbus_service_name_grid}")
+        logging.info(f"Dbus grid service name: {dbus_service_name_grid}")
         for item in dbus_objects_grid:
             # remove items that does not exist
             if dbus_objects_grid[item].exists:
@@ -985,7 +1006,7 @@ def setup_dbus_external_items():
                 logging.debug(f"{item} does not exist, removed from grid values")
 
     if dbus_service_name_ac_load != "":
-        logging.info(f"Dbus service name: {dbus_service_name_ac_load}")
+        logging.info(f"Dbus ac load service name: {dbus_service_name_ac_load}")
         for item in dbus_objects_ac_load:
             # remove items that does not exist
             if dbus_objects_ac_load[item].exists:
